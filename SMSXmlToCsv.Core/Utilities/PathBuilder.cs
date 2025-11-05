@@ -16,31 +16,7 @@ public class PathBuilder
     /// <returns>The resolved path with all placeholders replaced.</returns>
     public string BuildPath(string template, Contact? contact = null)
     {
-        if (string.IsNullOrEmpty(template))
-        {
-            throw new ArgumentException("Template cannot be null or empty.", nameof(template));
-        }
-
-        var path = template;
-
-        // Replace date and time placeholders
-        var now = DateTime.Now;
-        path = path.Replace("{date}", now.ToString("yyyy-MM-dd"));
-        path = path.Replace("{time}", now.ToString("HH-mm-ss"));
-        path = path.Replace("{datetime}", now.ToString("yyyy-MM-dd_HH-mm-ss"));
-        path = path.Replace("{year}", now.ToString("yyyy"));
-        path = path.Replace("{month}", now.ToString("MM"));
-        path = path.Replace("{day}", now.ToString("dd"));
-
-        // Replace contact-specific placeholders
-        if (contact != null)
-        {
-            path = path.Replace("{contact_name}", SanitizeFileName(contact.Name));
-            path = path.Replace("{contact_id}", contact.Id);
-            path = path.Replace("{phone_number}", SanitizeFileName(contact.PhoneNumber));
-        }
-
-        return path;
+        return BuildPath(template, DateTime.Now, contact);
     }
 
     /// <summary>
@@ -57,24 +33,47 @@ public class PathBuilder
             throw new ArgumentException("Template cannot be null or empty.", nameof(template));
         }
 
-        var path = template;
+        var path = ReplaceDateTimePlaceholders(template, dateTime);
+        path = ReplaceContactPlaceholders(path, contact);
 
-        // Replace date and time placeholders with provided DateTime
+        return path;
+    }
+
+    /// <summary>
+    /// Replaces date and time placeholders in the template with the provided DateTime.
+    /// </summary>
+    /// <param name="template">The template string containing placeholders.</param>
+    /// <param name="dateTime">The DateTime to use for replacement.</param>
+    /// <returns>The template with date/time placeholders replaced.</returns>
+    private string ReplaceDateTimePlaceholders(string template, DateTime dateTime)
+    {
+        var path = template;
         path = path.Replace("{date}", dateTime.ToString("yyyy-MM-dd"));
         path = path.Replace("{time}", dateTime.ToString("HH-mm-ss"));
         path = path.Replace("{datetime}", dateTime.ToString("yyyy-MM-dd_HH-mm-ss"));
         path = path.Replace("{year}", dateTime.ToString("yyyy"));
         path = path.Replace("{month}", dateTime.ToString("MM"));
         path = path.Replace("{day}", dateTime.ToString("dd"));
+        return path;
+    }
 
-        // Replace contact-specific placeholders
-        if (contact != null)
+    /// <summary>
+    /// Replaces contact-specific placeholders in the template.
+    /// </summary>
+    /// <param name="template">The template string containing placeholders.</param>
+    /// <param name="contact">The contact information to use for replacement.</param>
+    /// <returns>The template with contact placeholders replaced.</returns>
+    private string ReplaceContactPlaceholders(string template, Contact? contact)
+    {
+        if (contact == null)
         {
-            path = path.Replace("{contact_name}", SanitizeFileName(contact.Name));
-            path = path.Replace("{contact_id}", contact.Id);
-            path = path.Replace("{phone_number}", SanitizeFileName(contact.PhoneNumber));
+            return template;
         }
 
+        var path = template;
+        path = path.Replace("{contact_name}", SanitizeFileName(contact.Name));
+        path = path.Replace("{contact_id}", contact.Id);
+        path = path.Replace("{phone_number}", SanitizeFileName(contact.PhoneNumber));
         return path;
     }
 
@@ -98,16 +97,10 @@ public class PathBuilder
             fileName = fileName.Replace(c, '_');
         }
 
-        // Also replace some additional characters that might cause issues
-        fileName = fileName.Replace('/', '_');
-        fileName = fileName.Replace('\\', '_');
+        // Explicitly handle additional characters that may be valid on some platforms (e.g., Linux)
+        // but invalid on others (e.g., Windows). This ensures cross-platform compatibility.
         fileName = fileName.Replace(':', '_');
         fileName = fileName.Replace('*', '_');
-        fileName = fileName.Replace('?', '_');
-        fileName = fileName.Replace('"', '_');
-        fileName = fileName.Replace('<', '_');
-        fileName = fileName.Replace('>', '_');
-        fileName = fileName.Replace('|', '_');
 
         var sanitized = fileName.Trim();
         
