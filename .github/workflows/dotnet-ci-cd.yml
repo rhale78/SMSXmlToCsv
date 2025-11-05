@@ -1,0 +1,126 @@
+name: .NET CI/CD
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '9.0.x'
+        
+    - name: Restore dependencies
+      run: dotnet restore
+      
+    - name: Build
+      run: dotnet build --no-restore --configuration Release
+      
+    - name: Test
+      run: dotnet test --no-build --configuration Release --verbosity normal
+      
+  create-release-draft:
+    needs: build-and-test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '9.0.x'
+        
+    - name: Restore dependencies
+      run: dotnet restore
+      
+    - name: Build Release
+      run: dotnet build --no-restore --configuration Release
+      
+    - name: Publish Application
+      run: |
+        dotnet publish src/SMSXmlToCsv/SMSXmlToCsv.csproj \
+          --configuration Release \
+          --output ./publish/linux-x64 \
+          --runtime linux-x64 \
+          --self-contained true \
+          -p:PublishSingleFile=true \
+          -p:IncludeNativeLibrariesForSelfExtract=true
+        
+        dotnet publish src/SMSXmlToCsv/SMSXmlToCsv.csproj \
+          --configuration Release \
+          --output ./publish/win-x64 \
+          --runtime win-x64 \
+          --self-contained true \
+          -p:PublishSingleFile=true \
+          -p:IncludeNativeLibrariesForSelfExtract=true
+        
+        dotnet publish src/SMSXmlToCsv/SMSXmlToCsv.csproj \
+          --configuration Release \
+          --output ./publish/osx-x64 \
+          --runtime osx-x64 \
+          --self-contained true \
+          -p:PublishSingleFile=true \
+          -p:IncludeNativeLibrariesForSelfExtract=true
+      
+    - name: Create Release Archives
+      run: |
+        cd publish
+        zip -r ../SMSXmlToCsv-linux-x64.zip linux-x64/
+        zip -r ../SMSXmlToCsv-win-x64.zip win-x64/
+        zip -r ../SMSXmlToCsv-osx-x64.zip osx-x64/
+        cd ..
+      
+    - name: Generate Version Tag
+      id: version
+      run: |
+        # Use date-based versioning: v{year}.{month}.{build_number}
+        VERSION="v$(date +'%Y.%m').${{ github.run_number }}"
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Generated version: $VERSION"
+      
+    - name: Create Draft Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.version.outputs.version }}
+        name: Release ${{ steps.version.outputs.version }}
+        body: |
+          # SMSXmlToCsv Release ${{ steps.version.outputs.version }}
+          
+          Automated release build from commit ${{ github.sha }}
+          
+          ## Changes
+          This release includes the latest changes from the main branch.
+          
+          ## Downloads
+          - **Linux x64**: SMSXmlToCsv-linux-x64.zip
+          - **Windows x64**: SMSXmlToCsv-win-x64.zip
+          - **macOS x64**: SMSXmlToCsv-osx-x64.zip
+          
+          ## Installation
+          1. Download the appropriate package for your platform
+          2. Extract the archive
+          3. Run the SMSXmlToCsv executable
+          
+          **Note**: This is a draft release. Review and publish when ready.
+        draft: true
+        prerelease: false
+        files: |
+          SMSXmlToCsv-linux-x64.zip
+          SMSXmlToCsv-win-x64.zip
+          SMSXmlToCsv-osx-x64.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
