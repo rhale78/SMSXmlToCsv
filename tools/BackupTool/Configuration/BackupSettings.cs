@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace SMSXmlToCsv.Configuration;
+namespace BackupTool.Configuration;
 
 public class BackupSettings
 {

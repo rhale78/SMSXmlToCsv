@@ -1,10 +1,10 @@
 using System;
 using System.IO;
 using System.Linq;
-using SMSXmlToCsv.Configuration;
+using BackupTool.Configuration;
 using Serilog;
 
-namespace SMSXmlToCsv.Services;
+namespace BackupTool.Services;
 
 public class SolutionBackupOrchestrator
 {

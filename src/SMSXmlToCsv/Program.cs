@@ -1,15 +1,21 @@
-﻿using System;
+using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Microsoft.Extensions.Configuration;
 using Serilog;
 using Spectre.Console;
-using SMSXmlToCsv.Configuration;
+using SMSXmlToCsv.Exporters;
+using SMSXmlToCsv.Importers;
+using SMSXmlToCsv.Models;
 using SMSXmlToCsv.Services;
 
 namespace SMSXmlToCsv;
 
 public class Program
 {
+    private static List<Message> _importedMessages = new List<Message>();
+
     public static void Main(string[] args)
     {
         // Load configuration
@@ -27,13 +33,6 @@ public class Program
         {
             Log.Information("SMSXmlToCsv Application Starting");
 
-            // Check if this is a backup-only run (called from build)
-            if (args.Length > 0 && args[0] == "--backup-only")
-            {
-                PerformBackup(configuration);
-                return;
-            }
-
             // Show main menu
             ShowMainMenu(configuration);
 
@@ -46,37 +45,6 @@ public class Program
         finally
         {
             Log.CloseAndFlush();
-        }
-    }
-
-    private static void PerformBackup(IConfiguration configuration)
-    {
-        try
-        {
-            BackupSettings backupSettings = new BackupSettings();
-            configuration.GetSection("BackupSettings").Bind(backupSettings);
-
-            if (!backupSettings.Enabled)
-            {
-                return;
-            }
-
-            PathBuilder pathBuilder = new PathBuilder();
-            SolutionBackupOrchestrator orchestrator = new SolutionBackupOrchestrator(
-                backupSettings, 
-                pathBuilder, 
-                Log.Logger);
-
-            // Backup from solution root (3 levels up from bin/Debug/net9.0)
-            string solutionDirectory = Path.GetFullPath(Path.Combine(
-                Directory.GetCurrentDirectory(), 
-                "../../../.."));
-
-            orchestrator.BackupSolution(solutionDirectory);
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Error during backup operation");
         }
     }
 
@@ -93,6 +61,12 @@ public class Program
                     .Color(Color.Blue));
 
             AnsiConsole.WriteLine();
+            
+            if (_importedMessages.Any())
+            {
+                AnsiConsole.MarkupLine($"[green]✓ {_importedMessages.Count} messages loaded[/]");
+                AnsiConsole.WriteLine();
+            }
 
             string choice = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
@@ -101,38 +75,23 @@ public class Program
                     {
                         "Import Messages",
                         "Export Messages",
-                        "Backup Project Now",
-                        "Settings",
+                        "Clear Imported Messages",
                         "Exit"
                     }));
 
             switch (choice)
             {
                 case "Import Messages":
-                    AnsiConsole.MarkupLine("[yellow]Import feature coming soon...[/]");
-                    AnsiConsole.WriteLine("Press any key to continue...");
-                    Console.ReadKey();
+                    ImportMessages();
                     break;
 
                 case "Export Messages":
-                    AnsiConsole.MarkupLine("[yellow]Export feature coming soon...[/]");
-                    AnsiConsole.WriteLine("Press any key to continue...");
-                    Console.ReadKey();
+                    ExportMessages();
                     break;
 
-                case "Backup Project Now":
-                    AnsiConsole.Status()
-                        .Start("Creating backup...", ctx =>
-                        {
-                            PerformBackup(configuration);
-                        });
-                    AnsiConsole.MarkupLine("[green]Backup completed![/]");
-                    AnsiConsole.WriteLine("Press any key to continue...");
-                    Console.ReadKey();
-                    break;
-
-                case "Settings":
-                    AnsiConsole.MarkupLine("[yellow]Settings feature coming soon...[/]");
+                case "Clear Imported Messages":
+                    _importedMessages.Clear();
+                    AnsiConsole.MarkupLine("[yellow]Messages cleared[/]");
                     AnsiConsole.WriteLine("Press any key to continue...");
                     Console.ReadKey();
                     break;
@@ -143,5 +102,151 @@ public class Program
             }
         }
     }
-}
 
+    private static void ImportMessages()
+    {
+        AnsiConsole.Clear();
+        AnsiConsole.MarkupLine("[bold blue]Import Messages[/]");
+        AnsiConsole.WriteLine();
+
+        string importerChoice = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("Select import source:")
+                .AddChoices(new[]
+                {
+                    "Android SMS Backup (XML)",
+                    "Facebook Messenger (JSON)",
+                    "Instagram Messages (JSON)",
+                    "Google Takeout (Hangouts/Voice)",
+                    "Gmail (.mbox)",
+                    "Cancel"
+                }));
+
+        if (importerChoice == "Cancel")
+        {
+            return;
+        }
+
+        string sourcePath = AnsiConsole.Ask<string>("Enter the path to the data source:");
+
+        if (!File.Exists(sourcePath) && !Directory.Exists(sourcePath))
+        {
+            AnsiConsole.MarkupLine("[red]Error: Path not found[/]");
+            AnsiConsole.WriteLine("Press any key to continue...");
+            Console.ReadKey();
+            return;
+        }
+
+        IDataImporter? importer = importerChoice switch
+        {
+            "Android SMS Backup (XML)" => new SmsXmlImporter(),
+            "Facebook Messenger (JSON)" => new FacebookMessageImporter(),
+            "Instagram Messages (JSON)" => new InstagramMessageImporter(),
+            "Google Takeout (Hangouts/Voice)" => new GoogleTakeoutImporter(),
+            "Gmail (.mbox)" => new GoogleMailImporter(),
+            _ => null
+        };
+
+        if (importer == null)
+        {
+            return;
+        }
+
+        try
+        {
+            AnsiConsole.Status()
+                .Start("Importing messages...", ctx =>
+                {
+                    IEnumerable<Message> messages = importer.ImportAsync(sourcePath).GetAwaiter().GetResult();
+                    _importedMessages.AddRange(messages);
+                });
+
+            AnsiConsole.MarkupLine($"[green]✓ Successfully imported {_importedMessages.Count} total messages[/]");
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Error: {ex.Message}[/]");
+            Log.Error(ex, "Error importing messages");
+        }
+
+        AnsiConsole.WriteLine("Press any key to continue...");
+        Console.ReadKey();
+    }
+
+    private static void ExportMessages()
+    {
+        if (!_importedMessages.Any())
+        {
+            AnsiConsole.MarkupLine("[yellow]No messages to export. Please import messages first.[/]");
+            AnsiConsole.WriteLine("Press any key to continue...");
+            Console.ReadKey();
+            return;
+        }
+
+        AnsiConsole.Clear();
+        AnsiConsole.MarkupLine("[bold blue]Export Messages[/]");
+        AnsiConsole.WriteLine();
+
+        string formatChoice = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("Select export format:")
+                .AddChoices(new[]
+                {
+                    "CSV (Spreadsheet)",
+                    "JSONL (JSON Lines)",
+                    "HTML (Chat Interface)",
+                    "Parquet (Analytics)",
+                    "Cancel"
+                }));
+
+        if (formatChoice == "Cancel")
+        {
+            return;
+        }
+
+        string outputDirectory = AnsiConsole.Ask<string>("Enter output directory:", "./exports");
+        string baseFileName = AnsiConsole.Ask<string>("Enter base filename:", "messages");
+
+        IDataExporter? exporter = formatChoice switch
+        {
+            "CSV (Spreadsheet)" => new CsvExporter(),
+            "JSONL (JSON Lines)" => new JsonlExporter(),
+            "HTML (Chat Interface)" => new HtmlExporter(),
+            "Parquet (Analytics)" => new ParquetExporter(),
+            _ => null
+        };
+
+        if (exporter == null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!Directory.Exists(outputDirectory))
+            {
+                Directory.CreateDirectory(outputDirectory);
+            }
+
+            AnsiConsole.Status()
+                .Start("Exporting messages...", ctx =>
+                {
+                    ExportPathBuilder pathBuilder = new ExportPathBuilder();
+                    ExportOrchestrator orchestrator = new ExportOrchestrator(pathBuilder, Log.Logger);
+                    orchestrator.ExportAllInOneAsync(_importedMessages, exporter, outputDirectory, baseFileName)
+                        .GetAwaiter().GetResult();
+                });
+
+            string outputFile = Path.Combine(outputDirectory, $"{baseFileName}.{exporter.FileExtension}");
+            AnsiConsole.MarkupLine($"[green]✓ Successfully exported to {outputFile}[/]");
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Error: {ex.Message}[/]");
+            Log.Error(ex, "Error exporting messages");
+        }
+
+        AnsiConsole.WriteLine("Press any key to continue...");
+        Console.ReadKey();
+    }
+}

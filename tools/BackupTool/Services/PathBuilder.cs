@@ -1,6 +1,6 @@
 using System;
 
-namespace SMSXmlToCsv.Services;
+namespace BackupTool.Services;
 
 public class PathBuilder
 {

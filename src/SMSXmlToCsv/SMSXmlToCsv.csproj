@@ -28,4 +28,12 @@
     </None>
   </ItemGroup>
 
+  <!-- Pre-build backup using separate backup tool -->
+  <Target Name="PreBuildBackup" BeforeTargets="PreBuildEvent">
+    <Exec Command="dotnet run --project &quot;$(MSBuildProjectDirectory)/../../tools/BackupTool/BackupTool.csproj&quot; --configuration $(Configuration) -- &quot;$(MSBuildProjectDirectory)/../..&quot;" 
+          IgnoreExitCode="true" 
+          ContinueOnError="true" 
+          Condition="'$(Configuration)' == 'Debug' OR '$(Configuration)' == 'Release'" />
+  </Target>
+
 </Project>
