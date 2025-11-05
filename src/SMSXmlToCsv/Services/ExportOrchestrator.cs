@@ -71,6 +71,9 @@ public class ExportOrchestrator
                 .GroupBy(m => m.From.Name)
                 .ToDictionary(g => g.Key, g => g.ToList());
 
+            // Use consistent timestamp for all exports
+            string timestamp = DateTimeOffset.UtcNow.ToString("yyyy-MM-dd");
+
             foreach (KeyValuePair<string, List<Message>> contactGroup in messagesByContact)
             {
                 string contactName = contactGroup.Key;
@@ -85,7 +88,7 @@ public class ExportOrchestrator
 
                 _pathBuilder.EnsureDirectoryExists(contactDirectory);
 
-                string fileName = $"messages_{DateTime.Now:yyyy-MM-dd}";
+                string fileName = $"messages_{timestamp}";
                 
                 _logger.Information("Exporting {MessageCount} messages for contact {ContactName}",
                     contactMessages.Count, contactName);

@@ -9,6 +9,13 @@ namespace SMSXmlToCsv.Services;
 /// </summary>
 public class ExportPathBuilder
 {
+    private readonly DateTime _timestamp;
+
+    public ExportPathBuilder()
+    {
+        _timestamp = DateTime.Now;
+    }
+
     /// <summary>
     /// Builds a path from a template with placeholder substitution.
     /// Supported placeholders: {date}, {time}, {datetime}, {contact_name}, {project}
@@ -19,11 +26,10 @@ public class ExportPathBuilder
     /// <returns>The resolved path with placeholders replaced.</returns>
     public string BuildPath(string template, Contact? contact = null, string? projectName = null)
     {
-        DateTime now = DateTime.Now;
         string path = template
-            .Replace("{date}", now.ToString("yyyy-MM-dd"))
-            .Replace("{time}", now.ToString("HH-mm-ss"))
-            .Replace("{datetime}", now.ToString("yyyy-MM-dd_HH-mm-ss"))
+            .Replace("{date}", _timestamp.ToString("yyyy-MM-dd"))
+            .Replace("{time}", _timestamp.ToString("HH-mm-ss"))
+            .Replace("{datetime}", _timestamp.ToString("yyyy-MM-dd_HH-mm-ss"))
             .Replace("{project}", projectName ?? "Unknown");
 
         if (contact != null)

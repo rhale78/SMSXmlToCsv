@@ -4,7 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using System.Web;
+using System.Net;
 using SMSXmlToCsv.Models;
 
 namespace SMSXmlToCsv.Exporters;
@@ -137,6 +137,6 @@ public class HtmlExporter : IDataExporter
             return string.Empty;
         }
 
-        return HttpUtility.HtmlEncode(text);
+        return WebUtility.HtmlEncode(text);
     }
 }

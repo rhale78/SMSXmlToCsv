@@ -4,13 +4,19 @@ namespace SMSXmlToCsv.Services;
 
 public class PathBuilder
 {
+    private readonly DateTime _timestamp;
+
+    public PathBuilder()
+    {
+        _timestamp = DateTime.Now;
+    }
+
     public string BuildPath(string template, string? projectName = null)
     {
-        DateTime now = DateTime.Now;
         string path = template
-            .Replace("{date}", now.ToString("yyyy-MM-dd"))
-            .Replace("{time}", now.ToString("HH-mm-ss"))
-            .Replace("{datetime}", now.ToString("yyyy-MM-dd_HH-mm-ss"))
+            .Replace("{date}", _timestamp.ToString("yyyy-MM-dd"))
+            .Replace("{time}", _timestamp.ToString("HH-mm-ss"))
+            .Replace("{datetime}", _timestamp.ToString("yyyy-MM-dd_HH-mm-ss"))
             .Replace("{project}", projectName ?? "Unknown");
         
         return path;
