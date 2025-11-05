@@ -2,6 +2,8 @@
 
 A comprehensive .NET 9 console application for importing, consolidating, and exporting messages from various messaging platforms. Convert your message history from Android SMS, Facebook Messenger, Instagram, Google Hangouts, Google Voice, Gmail, and more into multiple convenient formats.
 
+> **📦 Legacy Code Archive**: Looking for the original feature-rich version with network graphs, sentiment analysis, and advanced analytics? See the [/old directory](old/README.md) for the archived legacy codebase and documentation. The current version focuses on clean architecture and extensibility.
+
 ## Features
 
 ### 🚀 Core Capabilities
@@ -41,13 +43,17 @@ SMSXmlToCsv/
 │       └── dotnet-ci-cd.yml      # CI/CD automation
 ├── src/
 │   └── SMSXmlToCsv/
-│       ├── Configuration/         # Configuration classes
 │       ├── Exporters/            # Data export implementations
 │       ├── Importers/            # Data import implementations
 │       ├── Models/               # Core data models
 │       ├── Services/             # Business logic and services
 │       ├── Program.cs            # Application entry point
 │       └── appsettings.json      # Configuration file
+├── old/                          # Legacy code archive (v0.7-1.7)
+│   ├── code/                     # Original implementation
+│   ├── docs/                     # Original documentation
+│   └── README.md                 # Legacy code documentation
+├── tools/                        # Build and utility tools
 ├── SMSXmlToCsv.sln
 ├── README.md
 └── LICENSE
