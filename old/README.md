@@ -87,6 +87,12 @@ See the `docs/` directory for comprehensive documentation:
 - `KNOWN_ISSUES.md` - Known issues and workarounds
 - `TROUBLESHOOTING.md` - Troubleshooting guide
 
+See the `wiki/` directory for additional wiki pages (designed for GitHub Wiki):
+- `Home.md` - Wiki landing page and navigation
+- `Quick-Start.md` - 5-minute getting started guide
+- `FAQ.md` - Frequently asked questions
+- `Installing-Ollama.md` - AI setup guide
+
 ## Security Note
 
 This code has been reviewed for PII (Personally Identifiable Information) leaks:

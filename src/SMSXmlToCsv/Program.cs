@@ -316,19 +316,20 @@ public class Program
         AnsiConsole.MarkupLine("[bold blue]Export Messages[/]");
         AnsiConsole.WriteLine();
 
-        string formatChoice = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title("Select export format:")
+        List<string> formatChoices = AnsiConsole.Prompt(
+            new MultiSelectionPrompt<string>()
+                .Title("Select export format(s) (use [blue]Space[/] to select, [blue]Enter[/] to confirm):")
+                .Required()
+                .InstructionsText("[grey](Press [blue]Space[/] to toggle, [green]Enter[/] to accept)[/]")
                 .AddChoices(new[]
                 {
                     "CSV (Spreadsheet)",
                     "JSONL (JSON Lines)",
                     "HTML (Chat Interface)",
-                    "Parquet (Analytics)",
-                    "Cancel"
+                    "Parquet (Analytics)"
                 }));
 
-        if (formatChoice == "Cancel")
+        if (!formatChoices.Any())
         {
             return;
         }
@@ -336,16 +337,25 @@ public class Program
         string outputDirectory = AnsiConsole.Ask<string>("Enter output directory:", "./exports");
         string baseFileName = AnsiConsole.Ask<string>("Enter base filename:", "messages");
 
-        IDataExporter? exporter = formatChoice switch
+        List<IDataExporter> exporters = new List<IDataExporter>();
+        foreach (string formatChoice in formatChoices)
         {
-            "CSV (Spreadsheet)" => new CsvExporter(),
-            "JSONL (JSON Lines)" => new JsonlExporter(),
-            "HTML (Chat Interface)" => new HtmlExporter(),
-            "Parquet (Analytics)" => new ParquetExporter(),
-            _ => null
-        };
+            IDataExporter? exporter = formatChoice switch
+            {
+                "CSV (Spreadsheet)" => new CsvExporter(),
+                "JSONL (JSON Lines)" => new JsonlExporter(),
+                "HTML (Chat Interface)" => new HtmlExporter(),
+                "Parquet (Analytics)" => new ParquetExporter(),
+                _ => null
+            };
 
-        if (exporter == null)
+            if (exporter != null)
+            {
+                exporters.Add(exporter);
+            }
+        }
+
+        if (!exporters.Any())
         {
             return;
         }
@@ -357,17 +367,62 @@ public class Program
                 Directory.CreateDirectory(outputDirectory);
             }
 
-            AnsiConsole.Status()
-                .Start("Exporting messages...", ctx =>
+            ExportPathBuilder pathBuilder = new ExportPathBuilder();
+            ExportOrchestrator orchestrator = new ExportOrchestrator(pathBuilder, Log.Logger);
+
+            int successCount = 0;
+            int failCount = 0;
+            List<string> exportedFiles = new List<string>();
+
+            AnsiConsole.Progress()
+                .Start(ctx =>
                 {
-                    ExportPathBuilder pathBuilder = new ExportPathBuilder();
-                    ExportOrchestrator orchestrator = new ExportOrchestrator(pathBuilder, Log.Logger);
-                    orchestrator.ExportAllInOneAsync(_importedMessages, exporter, outputDirectory, baseFileName)
-                        .GetAwaiter().GetResult();
+                    ProgressTask task = ctx.AddTask("[green]Exporting messages[/]", maxValue: exporters.Count);
+
+                    foreach (IDataExporter exporter in exporters)
+                    {
+                        string formatName = exporter.FileExtension.ToUpperInvariant();
+                        task.Description = $"[green]Exporting to {formatName}...[/]";
+
+                        try
+                        {
+                            orchestrator.ExportAllInOneAsync(_importedMessages, exporter, outputDirectory, baseFileName)
+                                .GetAwaiter().GetResult();
+                            
+                            string outputFile = Path.Combine(outputDirectory, $"{baseFileName}.{exporter.FileExtension}");
+                            exportedFiles.Add(outputFile);
+                            successCount++;
+                            
+                            AnsiConsole.MarkupLine($"[green]✓ {formatName} export completed[/]");
+                        }
+                        catch (Exception ex)
+                        {
+                            failCount++;
+                            AnsiConsole.MarkupLine($"[red]✗ {formatName} export failed: {ex.Message}[/]");
+                            Log.Error(ex, $"Error exporting to {formatName}");
+                        }
+
+                        task.Increment(1);
+                    }
                 });
 
-            string outputFile = Path.Combine(outputDirectory, $"{baseFileName}.{exporter.FileExtension}");
-            AnsiConsole.MarkupLine($"[green]✓ Successfully exported to {outputFile}[/]");
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine($"[bold]Export Summary:[/]");
+            AnsiConsole.MarkupLine($"[green]✓ Successful: {successCount}[/]");
+            if (failCount > 0)
+            {
+                AnsiConsole.MarkupLine($"[red]✗ Failed: {failCount}[/]");
+            }
+
+            if (exportedFiles.Any())
+            {
+                AnsiConsole.WriteLine();
+                AnsiConsole.MarkupLine("[bold]Exported files:[/]");
+                foreach (string file in exportedFiles)
+                {
+                    AnsiConsole.MarkupLine($"  • {file}");
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -375,6 +430,7 @@ public class Program
             Log.Error(ex, "Error exporting messages");
         }
 
+        AnsiConsole.WriteLine();
         AnsiConsole.WriteLine("Press any key to continue...");
         Console.ReadKey();
     }
