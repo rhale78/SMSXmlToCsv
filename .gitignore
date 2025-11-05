@@ -1,0 +1,37 @@
+# Build artifacts
+bin/
+obj/
+*.dll
+*.exe
+*.pdb
+
+# User-specific files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# IDE files
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Backup files
+Backups/
+
+# Logs
+logs/
+*.log
+
+# NuGet
+packages/
+*.nupkg
+
+# Test results
+TestResults/
+
+# Temporary files
+*.tmp
+*.cache
