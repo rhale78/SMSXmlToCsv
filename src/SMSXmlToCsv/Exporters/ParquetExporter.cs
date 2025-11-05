@@ -38,7 +38,7 @@ public class ParquetExporter : IDataExporter
             new DataField<string>("ToName"),
             new DataField<string>("ToPhone"),
             new DataField<string>("ToEmail"),
-            new DataField<DateTimeOffset>("TimestampUtc"),
+            new DataField<DateTime>("TimestampUtc"),
             new DataField<string>("Direction"),
             new DataField<string>("Body"),
             new DataField<int>("AttachmentCount"),
@@ -53,7 +53,7 @@ public class ParquetExporter : IDataExporter
         string[] toNames = messageList.Select(m => m.To.Name).ToArray();
         string[] toPhones = messageList.Select(m => string.Join(";", m.To.PhoneNumbers)).ToArray();
         string[] toEmails = messageList.Select(m => string.Join(";", m.To.Emails)).ToArray();
-        DateTimeOffset[] timestamps = messageList.Select(m => m.TimestampUtc).ToArray();
+        DateTime[] timestamps = messageList.Select(m => m.TimestampUtc.UtcDateTime).ToArray();
         string[] directions = messageList.Select(m => m.Direction.ToString()).ToArray();
         string[] bodies = messageList.Select(m => m.Body).ToArray();
         int[] attachmentCounts = messageList.Select(m => m.Attachments.Count).ToArray();
@@ -96,7 +96,7 @@ public class ParquetExporter : IDataExporter
             new DataField<string>("SourceApplication"),
             new DataField<string>("FromName"),
             new DataField<string>("ToName"),
-            new DataField<DateTimeOffset>("TimestampUtc"),
+            new DataField<DateTime>("TimestampUtc"),
             new DataField<string>("Body")
         );
 
