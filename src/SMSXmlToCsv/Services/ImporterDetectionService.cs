@@ -67,6 +67,7 @@ public class ImporterDetectionService
         }
 
         // Check subdirectories (one level deep only to avoid deep recursion)
+        // Use case-insensitive comparison for directory names
         foreach (string subdirectory in Directory.GetDirectories(directoryPath))
         {
             foreach (IDataImporter importer in _availableImporters)

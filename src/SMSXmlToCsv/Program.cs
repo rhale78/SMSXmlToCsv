@@ -75,6 +75,9 @@ public class Program
                     {
                         "Import Messages",
                         "Export Messages",
+                        "Analysis & Reports",
+                        "Visualization",
+                        "Advanced Tools",
                         "Clear Imported Messages",
                         "Exit"
                     }));
@@ -87,6 +90,18 @@ public class Program
 
                 case "Export Messages":
                     ExportMessages();
+                    break;
+
+                case "Analysis & Reports":
+                    ShowAnalysisMenu();
+                    break;
+
+                case "Visualization":
+                    ShowVisualizationMenu();
+                    break;
+
+                case "Advanced Tools":
+                    ShowAdvancedToolsMenu();
                     break;
 
                 case "Clear Imported Messages":
@@ -326,7 +341,8 @@ public class Program
                     "CSV (Spreadsheet)",
                     "JSONL (JSON Lines)",
                     "HTML (Chat Interface)",
-                    "Parquet (Analytics)"
+                    "Parquet (Analytics)",
+                    "SQLite (Database)"
                 }));
 
         // Note: formatChoices will always have at least one item due to .Required() on the prompt
@@ -344,6 +360,7 @@ public class Program
                 "JSONL (JSON Lines)" => new JsonlExporter(),
                 "HTML (Chat Interface)" => new HtmlExporter(),
                 "Parquet (Analytics)" => new ParquetExporter(),
+                "SQLite (Database)" => new SqliteExporter(),
                 _ => null
             };
 
@@ -431,5 +448,501 @@ public class Program
         AnsiConsole.WriteLine();
         AnsiConsole.WriteLine("Press any key to continue...");
         Console.ReadKey();
+    }
+
+    private static void ShowAnalysisMenu()
+    {
+        if (!_importedMessages.Any())
+        {
+            AnsiConsole.MarkupLine("[yellow]No messages loaded. Please import messages first.[/]");
+            AnsiConsole.WriteLine("Press any key to continue...");
+            Console.ReadKey();
+            return;
+        }
+
+        AnsiConsole.Clear();
+        AnsiConsole.MarkupLine("[bold blue]Analysis & Reports[/]");
+        AnsiConsole.WriteLine();
+
+        string choice = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("Select analysis type:")
+                .AddChoices(new[]
+                {
+                    "Thread Analysis",
+                    "Response Time Analysis",
+                    "Advanced Statistics",
+                    "Message Search",
+                    "Sentiment Analysis (Requires Ollama)",
+                    "Generate PDF Report",
+                    "Back to Main Menu"
+                }));
+
+        try
+        {
+            switch (choice)
+            {
+                case "Thread Analysis":
+                    PerformThreadAnalysis();
+                    break;
+
+                case "Response Time Analysis":
+                    PerformResponseTimeAnalysis();
+                    break;
+
+                case "Advanced Statistics":
+                    ShowAdvancedStatistics();
+                    break;
+
+                case "Message Search":
+                    PerformMessageSearch();
+                    break;
+
+                case "Sentiment Analysis (Requires Ollama)":
+                    PerformSentimentAnalysis();
+                    break;
+
+                case "Generate PDF Report":
+                    GeneratePdfReport();
+                    break;
+
+                case "Back to Main Menu":
+                    return;
+            }
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Error: {ex.Message}[/]");
+            Log.Error(ex, "Error during analysis");
+            AnsiConsole.WriteLine("Press any key to continue...");
+            Console.ReadKey();
+        }
+    }
+
+    private static void ShowVisualizationMenu()
+    {
+        if (!_importedMessages.Any())
+        {
+            AnsiConsole.MarkupLine("[yellow]No messages loaded. Please import messages first.[/]");
+            AnsiConsole.WriteLine("Press any key to continue...");
+            Console.ReadKey();
+            return;
+        }
+
+        AnsiConsole.Clear();
+        AnsiConsole.MarkupLine("[bold blue]Visualization[/]");
+        AnsiConsole.WriteLine();
+
+        string choice = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("Select visualization type:")
+                .AddChoices(new[]
+                {
+                    "Network Graph (All Contacts)",
+                    "Network Graph (Per Contact)",
+                    "Back to Main Menu"
+                }));
+
+        try
+        {
+            switch (choice)
+            {
+                case "Network Graph (All Contacts)":
+                    GenerateNetworkGraph(perContact: false);
+                    break;
+
+                case "Network Graph (Per Contact)":
+                    GenerateNetworkGraph(perContact: true);
+                    break;
+
+                case "Back to Main Menu":
+                    return;
+            }
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Error: {ex.Message}[/]");
+            Log.Error(ex, "Error during visualization");
+            AnsiConsole.WriteLine("Press any key to continue...");
+            Console.ReadKey();
+        }
+    }
+
+    private static void ShowAdvancedToolsMenu()
+    {
+        if (!_importedMessages.Any())
+        {
+            AnsiConsole.MarkupLine("[yellow]No messages loaded. Please import messages first.[/]");
+            AnsiConsole.WriteLine("Press any key to continue...");
+            Console.ReadKey();
+            return;
+        }
+
+        AnsiConsole.Clear();
+        AnsiConsole.MarkupLine("[bold blue]Advanced Tools[/]");
+        AnsiConsole.WriteLine();
+
+        string choice = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("Select tool:")
+                .AddChoices(new[]
+                {
+                    "Contact Merge",
+                    "Contact Filter",
+                    "Date Range Filter",
+                    "Back to Main Menu"
+                }));
+
+        try
+        {
+            switch (choice)
+            {
+                case "Contact Merge":
+                    PerformContactMerge();
+                    break;
+
+                case "Contact Filter":
+                    ApplyContactFilter();
+                    break;
+
+                case "Date Range Filter":
+                    ApplyDateRangeFilter();
+                    break;
+
+                case "Back to Main Menu":
+                    return;
+            }
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Error: {ex.Message}[/]");
+            Log.Error(ex, "Error in advanced tools");
+            AnsiConsole.WriteLine("Press any key to continue...");
+            Console.ReadKey();
+        }
+    }
+
+    private static void PerformThreadAnalysis()
+    {
+        int timeout = AnsiConsole.Ask("Thread timeout in minutes:", 30);
+
+        Services.Analysis.ThreadAnalyzer analyzer = new Services.Analysis.ThreadAnalyzer(timeout);
+        List<Services.Analysis.ConversationThread> threads = analyzer.DetectThreads(_importedMessages);
+        Services.Analysis.ThreadStatistics stats = analyzer.CalculateStatistics(threads);
+
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[bold green]Thread Analysis Results[/]");
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine($"Total Threads: [cyan]{stats.TotalThreads}[/]");
+        AnsiConsole.MarkupLine($"Average Thread Length: [cyan]{stats.AverageThreadLength:F1}[/] messages");
+        AnsiConsole.MarkupLine($"Longest Thread: [cyan]{stats.LongestThread}[/] messages");
+        AnsiConsole.MarkupLine($"Average Duration: [cyan]{stats.AverageThreadDuration.TotalMinutes:F1}[/] minutes");
+
+        if (AnsiConsole.Confirm("Export thread analysis to JSON?"))
+        {
+            string outputPath = AnsiConsole.Ask("Output file path:", "./output/threads.json");
+            analyzer.ExportThreadsAsync(threads, outputPath).Wait();
+            AnsiConsole.MarkupLine($"[green]✓ Exported to {outputPath}[/]");
+        }
+
+        AnsiConsole.WriteLine("Press any key to continue...");
+        Console.ReadKey();
+    }
+
+    private static void PerformResponseTimeAnalysis()
+    {
+        Services.Analysis.ResponseTimeAnalyzer analyzer = new Services.Analysis.ResponseTimeAnalyzer();
+        Services.Analysis.ResponseTimeReport report = analyzer.AnalyzeResponseTimes(_importedMessages);
+
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[bold green]Response Time Analysis Results[/]");
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine($"Total Responses: [cyan]{report.TotalResponses}[/]");
+        AnsiConsole.MarkupLine($"Average Response Time: [cyan]{FormatTimeSpan(report.AverageResponseTime)}[/]");
+        AnsiConsole.MarkupLine($"Median Response Time: [cyan]{FormatTimeSpan(report.MedianResponseTime)}[/]");
+        AnsiConsole.MarkupLine($"Fastest: [cyan]{FormatTimeSpan(report.MinResponseTime)}[/]");
+        AnsiConsole.MarkupLine($"Slowest: [cyan]{FormatTimeSpan(report.MaxResponseTime)}[/]");
+
+        if (AnsiConsole.Confirm("Export response time analysis to JSON?"))
+        {
+            string outputPath = AnsiConsole.Ask("Output file path:", "./output/response-times.json");
+            analyzer.ExportReportAsync(report, outputPath).Wait();
+            AnsiConsole.MarkupLine($"[green]✓ Exported to {outputPath}[/]");
+        }
+
+        AnsiConsole.WriteLine("Press any key to continue...");
+        Console.ReadKey();
+    }
+
+    private static void ShowAdvancedStatistics()
+    {
+        Services.Analysis.StatisticsAnalyzer analyzer = new Services.Analysis.StatisticsAnalyzer();
+        Services.Analysis.MessageStatistics stats = analyzer.AnalyzeMessages(_importedMessages);
+
+        analyzer.DisplayStatistics(stats);
+
+        AnsiConsole.WriteLine();
+        string exportChoice = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("Export options:")
+                .AddChoices(new[] { "Export to JSON", "Export to Markdown", "Don't Export", "Back" }));
+
+        if (exportChoice == "Export to JSON")
+        {
+            string outputPath = AnsiConsole.Ask("Output file path:", "./output/statistics.json");
+            analyzer.ExportToJsonAsync(stats, outputPath).Wait();
+            AnsiConsole.MarkupLine($"[green]✓ Exported to {outputPath}[/]");
+        }
+        else if (exportChoice == "Export to Markdown")
+        {
+            string outputPath = AnsiConsole.Ask("Output file path:", "./output/statistics.md");
+            analyzer.ExportToMarkdownAsync(stats, outputPath).Wait();
+            AnsiConsole.MarkupLine($"[green]✓ Exported to {outputPath}[/]");
+        }
+
+        AnsiConsole.WriteLine("Press any key to continue...");
+        Console.ReadKey();
+    }
+
+    private static void PerformMessageSearch()
+    {
+        Services.Search.MessageSearchService searchService = new Services.Search.MessageSearchService();
+        searchService.LoadMessages(_importedMessages);
+        searchService.InteractiveSearch();
+    }
+
+    private static void PerformSentimentAnalysis()
+    {
+        string model = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("Select Ollama model:")
+                .AddChoices(Services.ML.OllamaSentimentAnalyzer.RecommendedModels));
+
+        Services.ML.OllamaSentimentAnalyzer analyzer = new Services.ML.OllamaSentimentAnalyzer(model);
+
+        if (!analyzer.IsAvailableAsync().Result)
+        {
+            AnsiConsole.MarkupLine("[red]Ollama is not available. Please ensure Ollama is running.[/]");
+            AnsiConsole.MarkupLine("[yellow]Install from: https://ollama.ai[/]");
+            AnsiConsole.WriteLine("Press any key to continue...");
+            Console.ReadKey();
+            return;
+        }
+
+        int maxMessages = AnsiConsole.Ask("How many messages to analyze? (warning: can be slow)", 10);
+        Dictionary<Services.ML.ExtendedSentiment, int> sentimentCounts = new Dictionary<Services.ML.ExtendedSentiment, int>();
+
+        AnsiConsole.Progress()
+            .Start(ctx =>
+            {
+                ProgressTask task = ctx.AddTask("[green]Analyzing sentiment[/]", maxValue: Math.Min(maxMessages, _importedMessages.Count));
+
+                foreach (Message message in _importedMessages.Take(maxMessages))
+                {
+                    Services.ML.SentimentResult result = analyzer.AnalyzeSentimentAsync(message.Body).Result;
+
+                    if (!sentimentCounts.ContainsKey(result.PrimarySentiment))
+                    {
+                        sentimentCounts[result.PrimarySentiment] = 0;
+                    }
+                    sentimentCounts[result.PrimarySentiment]++;
+
+                    task.Increment(1);
+                }
+            });
+
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[bold green]Sentiment Analysis Results[/]");
+        AnsiConsole.WriteLine();
+
+        foreach (KeyValuePair<Services.ML.ExtendedSentiment, int> kvp in sentimentCounts.OrderByDescending(x => x.Value))
+        {
+            double percentage = (double)kvp.Value / maxMessages * 100;
+            AnsiConsole.MarkupLine($"{kvp.Key}: [cyan]{kvp.Value}[/] ({percentage:F1}%)");
+        }
+
+        AnsiConsole.WriteLine("Press any key to continue...");
+        Console.ReadKey();
+    }
+
+    private static void GeneratePdfReport()
+    {
+        string outputPath = AnsiConsole.Ask("Output PDF file path:", "./output/report.pdf");
+
+        Services.Analysis.StatisticsAnalyzer statsAnalyzer = new Services.Analysis.StatisticsAnalyzer();
+        Services.Analysis.MessageStatistics stats = statsAnalyzer.AnalyzeMessages(_importedMessages);
+
+        Services.Reports.PdfReportGenerator pdfGenerator = new Services.Reports.PdfReportGenerator();
+
+        AnsiConsole.Status()
+            .Start("Generating PDF report...", ctx =>
+            {
+                pdfGenerator.GenerateReport(_importedMessages, outputPath, stats);
+            });
+
+        AnsiConsole.MarkupLine($"[green]✓ PDF report generated: {outputPath}[/]");
+        AnsiConsole.WriteLine("Press any key to continue...");
+        Console.ReadKey();
+    }
+
+    private static void GenerateNetworkGraph(bool perContact)
+    {
+        // First, select Ollama model
+        string model = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("Select Ollama model for AI topic extraction:")
+                .AddChoices(Services.ML.OllamaSentimentAnalyzer.RecommendedModels));
+
+        Services.ML.OllamaSentimentAnalyzer analyzer = new Services.ML.OllamaSentimentAnalyzer(model);
+
+        // Check if Ollama is available
+        if (!analyzer.IsAvailableAsync().Result)
+        {
+            AnsiConsole.MarkupLine("[red]Ollama is not available. Please ensure Ollama is running.[/]");
+            AnsiConsole.MarkupLine("[yellow]Install from: https://ollama.ai[/]");
+            AnsiConsole.MarkupLine($"[yellow]Then run: ollama pull {model}[/]");
+            AnsiConsole.WriteLine("Press any key to continue...");
+            Console.ReadKey();
+            return;
+        }
+
+        int maxTopics = AnsiConsole.Ask("Maximum topics per contact:", 250);
+        int minMessages = AnsiConsole.Ask("Minimum messages per topic:", 2);
+
+        AnsiConsole.MarkupLine($"[cyan]✓ Using AI ({model}) for topic extraction[/]");
+        AnsiConsole.MarkupLine($"[dim]Topics will be extracted using AI analysis of conversation content.[/]");
+        AnsiConsole.WriteLine();
+
+        Services.Visualization.NetworkGraphGenerator generator = 
+            new Services.Visualization.NetworkGraphGenerator(analyzer, minMessages, maxTopics);
+
+        try
+        {
+            if (perContact)
+            {
+                string outputDir = AnsiConsole.Ask("Output directory:", "./output/network-graphs");
+                
+                AnsiConsole.Status()
+                    .Start("Generating per-contact network graphs with AI...", ctx =>
+                    {
+                        generator.GeneratePerContactGraphsAsync(_importedMessages, outputDir).Wait();
+                    });
+            }
+            else
+            {
+                string outputPath = AnsiConsole.Ask("Output file path:", "./output/network-graph.html");
+
+                AnsiConsole.Status()
+                    .Start("Generating network graph with AI...", ctx =>
+                    {
+                        generator.GenerateGraphAsync(_importedMessages, outputPath).Wait();
+                    });
+            }
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Error: {ex.Message}[/]");
+            Log.Error(ex, "Error generating network graph");
+        }
+
+        AnsiConsole.WriteLine("Press any key to continue...");
+        Console.ReadKey();
+    }
+
+    private static void PerformContactMerge()
+    {
+        // Get unique contacts from messages
+        HashSet<Contact> uniqueContacts = new HashSet<Contact>();
+        foreach (Message message in _importedMessages)
+        {
+            uniqueContacts.Add(message.From);
+            uniqueContacts.Add(message.To);
+        }
+
+        Services.ContactMergeService mergeService = new Services.ContactMergeService();
+        List<Services.ContactMergeCandidate> candidates = mergeService.FindDuplicates(uniqueContacts);
+
+        if (candidates.Count == 0)
+        {
+            AnsiConsole.MarkupLine("[green]No duplicate contacts found![/]");
+            AnsiConsole.WriteLine("Press any key to continue...");
+            Console.ReadKey();
+            return;
+        }
+
+        Dictionary<string, string> mergeDecisions = mergeService.InteractiveMerge(candidates);
+
+        if (mergeDecisions.Count > 0)
+        {
+            _importedMessages = mergeService.ApplyMergeDecisions(_importedMessages, mergeDecisions).ToList();
+            AnsiConsole.MarkupLine($"[green]✓ Contact merge completed![/]");
+        }
+
+        AnsiConsole.WriteLine("Press any key to continue...");
+        Console.ReadKey();
+    }
+
+    private static void ApplyContactFilter()
+    {
+        Services.ContactFilterService filterService = new Services.ContactFilterService();
+        _importedMessages = filterService.InteractiveFilter(_importedMessages).ToList();
+
+        AnsiConsole.WriteLine("Press any key to continue...");
+        Console.ReadKey();
+    }
+
+    private static void ApplyDateRangeFilter()
+    {
+        bool useStartDate = AnsiConsole.Confirm("Filter by start date?");
+        DateTime? startDate = null;
+        if (useStartDate)
+        {
+            string startDateStr = AnsiConsole.Ask<string>("Enter start date (yyyy-MM-dd):");
+            startDate = Services.Filtering.DateRangeFilter.ParseDate(startDateStr);
+        }
+
+        bool useEndDate = AnsiConsole.Confirm("Filter by end date?");
+        DateTime? endDate = null;
+        if (useEndDate)
+        {
+            string endDateStr = AnsiConsole.Ask<string>("Enter end date (yyyy-MM-dd):");
+            endDate = Services.Filtering.DateRangeFilter.ParseDate(endDateStr);
+        }
+
+        if (!startDate.HasValue && !endDate.HasValue)
+        {
+            AnsiConsole.MarkupLine("[yellow]No date filter applied.[/]");
+            AnsiConsole.WriteLine("Press any key to continue...");
+            Console.ReadKey();
+            return;
+        }
+
+        Services.Filtering.DateRangeFilter filter = new Services.Filtering.DateRangeFilter(true, startDate, endDate);
+        int originalCount = _importedMessages.Count;
+        _importedMessages = filter.Filter(_importedMessages).ToList();
+
+        AnsiConsole.MarkupLine($"[green]✓ Filtered from {originalCount} to {_importedMessages.Count} messages[/]");
+        AnsiConsole.WriteLine("Press any key to continue...");
+        Console.ReadKey();
+    }
+
+    private static string FormatTimeSpan(TimeSpan timeSpan)
+    {
+        if (timeSpan.TotalMinutes < 1)
+        {
+            return $"{timeSpan.TotalSeconds:F0} seconds";
+        }
+        else if (timeSpan.TotalHours < 1)
+        {
+            return $"{timeSpan.TotalMinutes:F0} minutes";
+        }
+        else if (timeSpan.TotalDays < 1)
+        {
+            return $"{timeSpan.TotalHours:F1} hours";
+        }
+        else
+        {
+            return $"{timeSpan.TotalDays:F1} days";
+        }
     }
 }
