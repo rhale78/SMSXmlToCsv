@@ -588,6 +588,7 @@ public class Program
                 .AddChoices(new[]
                 {
                     "Contact Merge",
+                    "Contact Filter",
                     "Date Range Filter",
                     "Back to Main Menu"
                 }));
@@ -598,6 +599,10 @@ public class Program
             {
                 case "Contact Merge":
                     PerformContactMerge();
+                    break;
+
+                case "Contact Filter":
+                    ApplyContactFilter();
                     break;
 
                 case "Date Range Filter":
@@ -841,6 +846,15 @@ public class Program
             _importedMessages = mergeService.ApplyMergeDecisions(_importedMessages, mergeDecisions).ToList();
             AnsiConsole.MarkupLine($"[green]✓ Contact merge completed![/]");
         }
+
+        AnsiConsole.WriteLine("Press any key to continue...");
+        Console.ReadKey();
+    }
+
+    private static void ApplyContactFilter()
+    {
+        Services.ContactFilterService filterService = new Services.ContactFilterService();
+        _importedMessages = filterService.InteractiveFilter(_importedMessages).ToList();
 
         AnsiConsole.WriteLine("Press any key to continue...");
         Console.ReadKey();

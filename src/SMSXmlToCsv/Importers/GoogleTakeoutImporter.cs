@@ -24,14 +24,56 @@ public class GoogleTakeoutImporter : IDataImporter
             return false;
         }
 
-        // Check for Hangouts.json
-        string hangoutsPath1 = Path.Combine(sourcePath, "Hangouts", "Hangouts.json");
-        string hangoutsPath2 = Path.Combine(sourcePath, "Hangouts.json");
-        
-        // Check for Google Voice directory
-        string voicePath = Path.Combine(sourcePath, "Voice", "Calls");
+        // Check for Hangouts.json (case-insensitive)
+        string[] hangoutsPaths = new[]
+        {
+            Path.Combine(sourcePath, "Hangouts", "Hangouts.json"),
+            Path.Combine(sourcePath, "hangouts", "hangouts.json"),
+            Path.Combine(sourcePath, "Hangouts.json"),
+            Path.Combine(sourcePath, "hangouts.json"),
+            Path.Combine(sourcePath, "Google Chat", "Hangouts.json"),
+            Path.Combine(sourcePath, "google chat", "hangouts.json"),
+            Path.Combine(sourcePath, "Google Chat", "Groups", "Hangouts.json"),
+            Path.Combine(sourcePath, "google chat", "groups", "hangouts.json")
+        };
 
-        return File.Exists(hangoutsPath1) || File.Exists(hangoutsPath2) || Directory.Exists(voicePath);
+        foreach (string path in hangoutsPaths)
+        {
+            if (File.Exists(path))
+            {
+                return true;
+            }
+        }
+
+        // Also check subdirectories case-insensitively
+        if (Directory.Exists(sourcePath))
+        {
+            foreach (string dir in Directory.GetDirectories(sourcePath))
+            {
+                string dirName = Path.GetFileName(dir).ToLowerInvariant();
+                if (dirName == "hangouts" || dirName == "google chat")
+                {
+                    return true;
+                }
+            }
+        }
+        
+        // Check for Google Voice directory (case-insensitive)
+        string[] voicePaths = new[]
+        {
+            Path.Combine(sourcePath, "Voice", "Calls"),
+            Path.Combine(sourcePath, "voice", "calls")
+        };
+
+        foreach (string path in voicePaths)
+        {
+            if (Directory.Exists(path))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public async Task<IEnumerable<Message>> ImportAsync(string sourcePath)
@@ -53,17 +95,32 @@ public class GoogleTakeoutImporter : IDataImporter
     {
         List<Message> messages = new List<Message>();
 
-        // Look for Hangouts.json
-        string hangoutsPath = Path.Combine(sourcePath, "Hangouts", "Hangouts.json");
-        
-        if (!File.Exists(hangoutsPath))
+        // Look for Hangouts.json in multiple locations (case-insensitive)
+        string[] possiblePaths = new[]
         {
-            // Try alternative locations
-            hangoutsPath = Path.Combine(sourcePath, "Hangouts.json");
-            if (!File.Exists(hangoutsPath))
+            Path.Combine(sourcePath, "Hangouts", "Hangouts.json"),
+            Path.Combine(sourcePath, "hangouts", "hangouts.json"),
+            Path.Combine(sourcePath, "Hangouts.json"),
+            Path.Combine(sourcePath, "hangouts.json"),
+            Path.Combine(sourcePath, "Google Chat", "Hangouts.json"),
+            Path.Combine(sourcePath, "google chat", "hangouts.json"),
+            Path.Combine(sourcePath, "Google Chat", "Groups", "Hangouts.json"),
+            Path.Combine(sourcePath, "google chat", "groups", "hangouts.json")
+        };
+
+        string? hangoutsPath = null;
+        foreach (string path in possiblePaths)
+        {
+            if (File.Exists(path))
             {
-                return messages; // No Hangouts data
+                hangoutsPath = path;
+                break;
             }
+        }
+
+        if (hangoutsPath == null)
+        {
+            return messages; // No Hangouts data
         }
 
         try
