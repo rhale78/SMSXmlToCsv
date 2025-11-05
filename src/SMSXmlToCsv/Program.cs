@@ -114,6 +114,7 @@ public class Program
                 .Title("Select import source:")
                 .AddChoices(new[]
                 {
+                    "Auto-Detect (Scan directory)",
                     "Android SMS Backup (XML)",
                     "Facebook Messenger (JSON)",
                     "Instagram Messages (JSON)",
@@ -124,6 +125,13 @@ public class Program
 
         if (importerChoice == "Cancel")
         {
+            return;
+        }
+
+        // Handle auto-detect separately
+        if (importerChoice == "Auto-Detect (Scan directory)")
+        {
+            ImportMessagesAutoDetect();
             return;
         }
 
@@ -167,6 +175,127 @@ public class Program
         {
             AnsiConsole.MarkupLine($"[red]Error: {ex.Message}[/]");
             Log.Error(ex, "Error importing messages");
+        }
+
+        AnsiConsole.WriteLine("Press any key to continue...");
+        Console.ReadKey();
+    }
+
+    private static void ImportMessagesAutoDetect()
+    {
+        string directoryPath = AnsiConsole.Ask<string>("Enter the directory path to scan:");
+
+        if (!Directory.Exists(directoryPath))
+        {
+            AnsiConsole.MarkupLine("[red]Error: Directory not found[/]");
+            AnsiConsole.WriteLine("Press any key to continue...");
+            Console.ReadKey();
+            return;
+        }
+
+        ImporterDetectionService detectionService = new ImporterDetectionService();
+        
+        try
+        {
+            IEnumerable<(IDataImporter Importer, string SourcePath)> detectedImporters = 
+                detectionService.DetectImporters(directoryPath).ToList();
+
+            if (!detectedImporters.Any())
+            {
+                AnsiConsole.MarkupLine("[yellow]No compatible data sources detected in this directory.[/]");
+                AnsiConsole.WriteLine("Press any key to continue...");
+                Console.ReadKey();
+                return;
+            }
+
+            // Display detected importers
+            AnsiConsole.MarkupLine($"[green]✓ Found {detectedImporters.Count()} compatible data source(s):[/]");
+            AnsiConsole.WriteLine();
+
+            Table table = new Table();
+            table.AddColumn("Importer");
+            table.AddColumn("Source Path");
+
+            foreach ((IDataImporter Importer, string SourcePath) item in detectedImporters)
+            {
+                table.AddRow(item.Importer.SourceName, Path.GetFileName(item.SourcePath));
+            }
+
+            AnsiConsole.Write(table);
+            AnsiConsole.WriteLine();
+
+            // Ask user if they want to import all or select specific ones
+            string choice = AnsiConsole.Prompt(
+                new SelectionPrompt<string>()
+                    .Title("What would you like to do?")
+                    .AddChoices(new[]
+                    {
+                        "Import All",
+                        "Select Specific Sources",
+                        "Cancel"
+                    }));
+
+            if (choice == "Cancel")
+            {
+                return;
+            }
+
+            List<(IDataImporter, string)> toImport = new List<(IDataImporter, string)>();
+
+            if (choice == "Import All")
+            {
+                toImport.AddRange(detectedImporters);
+            }
+            else
+            {
+                // Let user select specific importers
+                List<string> options = detectedImporters
+                    .Select(d => $"{d.Importer.SourceName} - {Path.GetFileName(d.SourcePath)}")
+                    .ToList();
+
+                List<string> selected = AnsiConsole.Prompt(
+                    new MultiSelectionPrompt<string>()
+                        .Title("Select sources to import:")
+                        .Required()
+                        .AddChoices(options));
+
+                toImport = detectedImporters
+                    .Where(d => selected.Contains($"{d.Importer.SourceName} - {Path.GetFileName(d.SourcePath)}"))
+                    .ToList();
+            }
+
+            // Import selected sources
+            int startCount = _importedMessages.Count;
+            
+            AnsiConsole.Status()
+                .Start("Importing messages...", ctx =>
+                {
+                    foreach ((IDataImporter importer, string sourcePath) in toImport)
+                    {
+                        ctx.Status($"Importing from {importer.SourceName}...");
+                        
+                        try
+                        {
+                            IEnumerable<Message> messages = importer.ImportAsync(sourcePath).GetAwaiter().GetResult();
+                            _importedMessages.AddRange(messages);
+                            Log.Information($"Imported {messages.Count()} messages from {importer.SourceName}");
+                        }
+                        catch (Exception ex)
+                        {
+                            AnsiConsole.MarkupLine($"[yellow]Warning: Failed to import from {importer.SourceName}: {ex.Message}[/]");
+                            Log.Warning(ex, $"Failed to import from {importer.SourceName}");
+                        }
+                    }
+                });
+
+            int importedCount = _importedMessages.Count - startCount;
+            AnsiConsole.MarkupLine($"[green]✓ Successfully imported {importedCount} messages from {toImport.Count} source(s)[/]");
+            AnsiConsole.MarkupLine($"[green]✓ Total messages: {_importedMessages.Count}[/]");
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Error: {ex.Message}[/]");
+            Log.Error(ex, "Error during auto-detection");
         }
 
         AnsiConsole.WriteLine("Press any key to continue...");
