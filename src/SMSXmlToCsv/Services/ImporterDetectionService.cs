@@ -41,6 +41,7 @@ public class ImporterDetectionService
         }
 
         List<(IDataImporter, string)> detectedImporters = new List<(IDataImporter, string)>();
+        HashSet<Type> detectedTypes = new HashSet<Type>();
 
         // Check if the directory itself is a valid source for any importer
         foreach (IDataImporter importer in _availableImporters)
@@ -48,6 +49,7 @@ public class ImporterDetectionService
             if (importer.CanImport(directoryPath))
             {
                 detectedImporters.Add((importer, directoryPath));
+                detectedTypes.Add(importer.GetType());
             }
         }
 
@@ -56,9 +58,10 @@ public class ImporterDetectionService
         {
             foreach (IDataImporter importer in _availableImporters)
             {
-                if (importer.CanImport(filePath) && !detectedImporters.Any(d => d.Item1.GetType() == importer.GetType()))
+                if (!detectedTypes.Contains(importer.GetType()) && importer.CanImport(filePath))
                 {
                     detectedImporters.Add((importer, filePath));
+                    detectedTypes.Add(importer.GetType());
                 }
             }
         }
@@ -68,9 +71,10 @@ public class ImporterDetectionService
         {
             foreach (IDataImporter importer in _availableImporters)
             {
-                if (importer.CanImport(subdirectory) && !detectedImporters.Any(d => d.Item1.GetType() == importer.GetType()))
+                if (!detectedTypes.Contains(importer.GetType()) && importer.CanImport(subdirectory))
                 {
                     detectedImporters.Add((importer, subdirectory));
+                    detectedTypes.Add(importer.GetType());
                 }
             }
         }
