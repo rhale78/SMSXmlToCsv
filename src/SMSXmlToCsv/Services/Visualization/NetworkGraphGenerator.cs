@@ -41,18 +41,17 @@ public class NetworkGraphGenerator
 {
     private readonly int _minTopicMessages;
     private readonly int _maxTopicsPerContact;
-    private readonly TopicAnalyzer _topicAnalyzer;
-    private readonly OllamaSentimentAnalyzer? _ollamaAnalyzer;
+    private readonly OllamaSentimentAnalyzer _ollamaAnalyzer;
 
     public NetworkGraphGenerator(
-        int minTopicMessages = 5,
-        int maxTopicsPerContact = 250,
-        OllamaSentimentAnalyzer? ollamaAnalyzer = null)
+        OllamaSentimentAnalyzer ollamaAnalyzer,
+        int minTopicMessages = 2,
+        int maxTopicsPerContact = 250)
     {
         _minTopicMessages = minTopicMessages;
         _maxTopicsPerContact = maxTopicsPerContact;
-        _topicAnalyzer = new TopicAnalyzer(maxTopicsPerContact: maxTopicsPerContact);
-        _ollamaAnalyzer = ollamaAnalyzer;
+        _ollamaAnalyzer = ollamaAnalyzer ?? throw new ArgumentNullException(nameof(ollamaAnalyzer),
+            "Ollama analyzer is required for AI-based topic extraction");
     }
 
     /// <summary>
@@ -60,7 +59,13 @@ public class NetworkGraphGenerator
     /// </summary>
     public async Task GenerateGraphAsync(IEnumerable<Message> messages, string outputPath, string userName = "You")
     {
-        Log.Information("Generating network graph with {MaxTopics} topics per contact", _maxTopicsPerContact);
+        Log.Information("Generating network graph with AI-based topic extraction ({MaxTopics} topics per contact)", _maxTopicsPerContact);
+
+        // Check if Ollama is available
+        if (!await _ollamaAnalyzer.IsAvailableAsync())
+        {
+            throw new InvalidOperationException("Ollama is not available. Please ensure Ollama is running. Install from: https://ollama.ai");
+        }
 
         List<Message> messageList = messages.ToList();
         Dictionary<string, GraphNode> nodes = new Dictionary<string, GraphNode>();
@@ -110,17 +115,21 @@ public class NetworkGraphGenerator
 
         Log.Information("Created {NodeCount} contact nodes and {LinkCount} links", nodes.Count - 1, links.Count);
 
-        // Extract topics per contact
+        // Extract topics per contact using AI
+        int totalTopicsFound = 0;
         await AnsiConsole.Status()
-            .StartAsync("Analyzing topics...", async ctx =>
+            .StartAsync("Analyzing topics with AI...", async ctx =>
             {
                 int processed = 0;
                 foreach (KeyValuePair<string, List<Message>> kvp in contactMessages)
                 {
                     processed++;
-                    ctx.Status($"Analyzing topics for contact {processed}/{contactMessages.Count}: {kvp.Key}");
+                    ctx.Status($"AI analyzing topics for contact {processed}/{contactMessages.Count}: {kvp.Key}");
 
-                    List<Topic> topics = _topicAnalyzer.ExtractTopics(kvp.Value, _minTopicMessages);
+                    List<Topic> topics = await ExtractTopicsWithAIAsync(kvp.Value, kvp.Key);
+
+                    Log.Information("Contact {ContactName}: Found {TopicCount} topics from {MessageCount} messages",
+                        kvp.Key, topics.Count, kvp.Value.Count);
 
                     // Take up to max topics per contact
                     nodes[kvp.Key].TopTopics = topics
@@ -142,6 +151,7 @@ public class NetworkGraphGenerator
                                 MessageCount = topic.MessageCount,
                                 Group = 2  // Topic group
                             };
+                            totalTopicsFound++;
                         }
                         else
                         {
@@ -158,12 +168,11 @@ public class NetworkGraphGenerator
                         };
                         links.Add(topicLink);
                     }
-
-                    await Task.Delay(1);  // Allow UI updates
                 }
             });
 
-        Log.Information("Created {TopicCount} topic nodes", nodes.Values.Count(n => n.Group == 2));
+        Log.Information("Created {TopicCount} topic nodes total", totalTopicsFound);
+        AnsiConsole.MarkupLine($"[cyan]Found {totalTopicsFound} unique topics across all contacts[/]");
 
         // Generate HTML
         await GenerateHtmlAsync(nodes.Values.ToList(), links, outputPath);
@@ -177,7 +186,13 @@ public class NetworkGraphGenerator
     /// </summary>
     public async Task GeneratePerContactGraphsAsync(IEnumerable<Message> messages, string outputDirectory, string userName = "You")
     {
-        Log.Information("Generating per-contact network graphs");
+        Log.Information("Generating per-contact network graphs with AI");
+
+        // Check if Ollama is available
+        if (!await _ollamaAnalyzer.IsAvailableAsync())
+        {
+            throw new InvalidOperationException("Ollama is not available. Please ensure Ollama is running. Install from: https://ollama.ai");
+        }
 
         // Group messages by contact
         Dictionary<string, List<Message>> contactMessages = messages
@@ -192,7 +207,7 @@ public class NetworkGraphGenerator
         foreach (KeyValuePair<string, List<Message>> kvp in contactMessages)
         {
             processed++;
-            AnsiConsole.MarkupLine($"[grey]Processing {processed}/{total}: {kvp.Key}[/]");
+            AnsiConsole.MarkupLine($"[grey]AI analyzing {processed}/{total}: {kvp.Key}[/]");
 
             string safeFileName = string.Join("_", kvp.Key.Split(Path.GetInvalidFileNameChars()));
             string outputPath = Path.Combine(outputDirectory, $"network_{safeFileName}.html");
@@ -235,8 +250,8 @@ public class NetworkGraphGenerator
             Value = messages.Count
         });
 
-        // Extract topics
-        List<Topic> topics = _topicAnalyzer.ExtractTopics(messages, _minTopicMessages);
+        // Extract topics using AI
+        List<Topic> topics = await ExtractTopicsWithAIAsync(messages, contactName);
 
         foreach (Topic topic in topics.Take(_maxTopicsPerContact))
         {
@@ -290,7 +305,7 @@ public class NetworkGraphGenerator
 <html>
 <head>
     <meta charset=""utf-8"">
-    <title>Message Network Graph</title>
+    <title>Message Network Graph (AI-Generated Topics)</title>
     <script src=""https://d3js.org/d3.v7.min.js""></script>
     <style>
         body {{
@@ -474,5 +489,87 @@ public class NetworkGraphGenerator
         }
 
         return "Unknown";
+    }
+
+    /// <summary>
+    /// Extract topics from messages using AI (Ollama)
+    /// </summary>
+    private async Task<List<Topic>> ExtractTopicsWithAIAsync(List<Message> messages, string contactName)
+    {
+        if (messages.Count == 0)
+        {
+            return new List<Topic>();
+        }
+
+        // Combine message bodies into conversation context
+        StringBuilder conversationBuilder = new StringBuilder();
+        conversationBuilder.AppendLine($"Conversation with {contactName}:");
+        conversationBuilder.AppendLine();
+
+        int messageCount = 0;
+        foreach (Message message in messages.Take(100))  // Limit to prevent token overflow
+        {
+            if (!string.IsNullOrWhiteSpace(message.Body))
+            {
+                conversationBuilder.AppendLine($"- {message.Body}");
+                messageCount++;
+            }
+        }
+
+        if (messageCount == 0)
+        {
+            return new List<Topic>();
+        }
+
+        string conversation = conversationBuilder.ToString();
+
+        // Ask AI to extract topics
+        string prompt = $@"{conversation}
+
+Based on the conversation above, identify the main topics discussed. 
+Return ONLY a comma-separated list of 5-15 single-word or short-phrase topics (e.g., ""work, family, vacation, plans, hobbies"").
+Do not include explanations or numbering, just the topics separated by commas.";
+
+        try
+        {
+            string response = await _ollamaAnalyzer.CallOllamaAsync(prompt);
+            
+            // Parse the response
+            List<string> topicNames = response
+                .Split(new[] { ',', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(t => t.Trim().Trim('.', '-', '*', '•', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', ')'))
+                .Where(t => !string.IsNullOrWhiteSpace(t) && t.Length > 2 && t.Length < 50)
+                .Distinct()
+                .Take(_maxTopicsPerContact)
+                .ToList();
+
+            List<Topic> topics = new List<Topic>();
+            foreach (string topicName in topicNames)
+            {
+                // Count how many messages mention this topic (approximate)
+                int count = messages.Count(m => 
+                    m.Body != null && m.Body.Contains(topicName, StringComparison.OrdinalIgnoreCase));
+
+                if (count == 0)
+                {
+                    count = Math.Max(1, messages.Count / Math.Max(1, topicNames.Count));  // Distribute evenly if not found
+                }
+
+                topics.Add(new Topic
+                {
+                    Name = topicName,
+                    MessageCount = count,
+                    Score = (double)count / messages.Count,
+                    Keywords = new List<string> { topicName }
+                });
+            }
+
+            return topics.OrderByDescending(t => t.MessageCount).ToList();
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Error extracting topics with AI for contact {ContactName}", contactName);
+            return new List<Topic>();
+        }
     }
 }

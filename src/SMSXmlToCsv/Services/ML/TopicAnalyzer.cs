@@ -40,13 +40,23 @@ public class TopicAnalyzer
     /// </summary>
     public List<Topic> ExtractTopics(IEnumerable<Message> messages, int minMessageCount = 2)
     {
-        Log.Information("Extracting topics from messages");
+        List<Message> messageList = messages.ToList();
+        
+        if (messageList.Count == 0)
+        {
+            Log.Warning("No messages provided for topic extraction");
+            return new List<Topic>();
+        }
+
+        Log.Information("Extracting topics from {MessageCount} messages with minMessageCount={MinCount}", 
+            messageList.Count, minMessageCount);
 
         // Extract keywords from each message
         Dictionary<string, List<string>> messageKeywords = new Dictionary<string, List<string>>();
         Dictionary<string, int> keywordFrequency = new Dictionary<string, int>();
 
-        foreach (Message message in messages)
+        int messagesWithKeywords = 0;
+        foreach (Message message in messageList)
         {
             if (string.IsNullOrWhiteSpace(message.Body))
             {
@@ -54,7 +64,13 @@ public class TopicAnalyzer
             }
 
             List<string> keywords = ExtractKeywords(message.Body);
-            string messageId = $"{message.From.Name}_{message.TimestampUtc}";
+            if (keywords.Count == 0)
+            {
+                continue;
+            }
+
+            messagesWithKeywords++;
+            string messageId = $"{message.From.Name}_{message.TimestampUtc.Ticks}";
             messageKeywords[messageId] = keywords;
 
             foreach (string keyword in keywords)
@@ -67,15 +83,39 @@ public class TopicAnalyzer
             }
         }
 
+        Log.Information("Found {KeywordCount} unique keywords from {MessageCount} messages", 
+            keywordFrequency.Count, messagesWithKeywords);
+
+        if (keywordFrequency.Count == 0)
+        {
+            Log.Warning("No keywords extracted from messages");
+            return new List<Topic>();
+        }
+
+        // Adjust minMessageCount if needed
+        int adjustedMinCount = minMessageCount;
+        if (messageList.Count < 10)
+        {
+            adjustedMinCount = 1;  // For small datasets, accept single occurrences
+            Log.Information("Adjusting minMessageCount to 1 for small dataset");
+        }
+        else if (minMessageCount > messageList.Count / 2)
+        {
+            adjustedMinCount = Math.Max(1, messageList.Count / 10);
+            Log.Information("Adjusting minMessageCount to {AdjustedCount}", adjustedMinCount);
+        }
+
         // Create topics based on keyword co-occurrence and frequency
         List<Topic> topics = new List<Topic>();
 
         // Get most frequent keywords
         List<KeyValuePair<string, int>> sortedKeywords = keywordFrequency
-            .Where(kvp => kvp.Value >= minMessageCount)
+            .Where(kvp => kvp.Value >= adjustedMinCount)
             .OrderByDescending(kvp => kvp.Value)
             .Take(_maxTopicsPerContact)
             .ToList();
+
+        Log.Information("Found {CandidateCount} candidate topics after filtering", sortedKeywords.Count);
 
         foreach (KeyValuePair<string, int> kvp in sortedKeywords)
         {
@@ -83,7 +123,7 @@ public class TopicAnalyzer
             {
                 Name = kvp.Key,
                 MessageCount = kvp.Value,
-                Score = (double)kvp.Value / messageKeywords.Count,
+                Score = (double)kvp.Value / Math.Max(1, messagesWithKeywords),
                 Keywords = new List<string> { kvp.Key }
             };
 
@@ -151,15 +191,26 @@ public class TopicAnalyzer
 
     private List<string> ExtractKeywords(string text)
     {
-        // Convert to lowercase and remove punctuation
-        string cleaned = Regex.Replace(text.ToLowerInvariant(), @"[^\w\s]", " ");
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return new List<string>();
+        }
+
+        // Convert to lowercase and remove punctuation but keep numbers
+        string cleaned = Regex.Replace(text.ToLowerInvariant(), @"[^\w\s\d]", " ");
 
         // Split into words
         List<string> words = cleaned.Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
             .Where(w => w.Length >= _minWordLength && !_stopWords.Contains(w))
+            .Where(w => !IsNumericOnly(w))  // Filter out pure numbers
             .ToList();
 
         return words;
+    }
+
+    private bool IsNumericOnly(string word)
+    {
+        return word.All(char.IsDigit);
     }
 
     private string GetContactName(Message message)

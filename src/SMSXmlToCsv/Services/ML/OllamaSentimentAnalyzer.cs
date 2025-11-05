@@ -101,6 +101,51 @@ public class OllamaSentimentAnalyzer
     }
 
     /// <summary>
+    /// Call Ollama with a custom prompt
+    /// </summary>
+    public async Task<string> CallOllamaAsync(string prompt)
+    {
+        try
+        {
+            object requestBody = new
+            {
+                model = _model,
+                prompt = prompt,
+                stream = false,
+                options = new
+                {
+                    temperature = 0.3
+                }
+            };
+
+            string jsonRequest = JsonSerializer.Serialize(requestBody);
+            StringContent content = new StringContent(jsonRequest, Encoding.UTF8, "application/json");
+
+            HttpResponseMessage response = await _httpClient.PostAsync($"{_baseUrl}/api/generate", content);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new Exception($"Ollama API error: {response.StatusCode}");
+            }
+
+            string jsonResponse = await response.Content.ReadAsStringAsync();
+            using JsonDocument doc = JsonDocument.Parse(jsonResponse);
+
+            if (doc.RootElement.TryGetProperty("response", out JsonElement responseElement))
+            {
+                return responseElement.GetString() ?? "";
+            }
+
+            return "";
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Error calling Ollama");
+            throw;
+        }
+    }
+
+    /// <summary>
     /// Get available models from Ollama
     /// </summary>
     public async Task<List<string>> GetAvailableModelsAsync()

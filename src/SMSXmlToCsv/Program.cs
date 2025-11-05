@@ -787,31 +787,62 @@ public class Program
 
     private static void GenerateNetworkGraph(bool perContact)
     {
+        // First, select Ollama model
+        string model = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("Select Ollama model for AI topic extraction:")
+                .AddChoices(Services.ML.OllamaSentimentAnalyzer.RecommendedModels));
+
+        Services.ML.OllamaSentimentAnalyzer analyzer = new Services.ML.OllamaSentimentAnalyzer(model);
+
+        // Check if Ollama is available
+        if (!analyzer.IsAvailableAsync().Result)
+        {
+            AnsiConsole.MarkupLine("[red]Ollama is not available. Please ensure Ollama is running.[/]");
+            AnsiConsole.MarkupLine("[yellow]Install from: https://ollama.ai[/]");
+            AnsiConsole.MarkupLine($"[yellow]Then run: ollama pull {model}[/]");
+            AnsiConsole.WriteLine("Press any key to continue...");
+            Console.ReadKey();
+            return;
+        }
+
         int maxTopics = AnsiConsole.Ask("Maximum topics per contact:", 250);
-        int minMessages = AnsiConsole.Ask("Minimum messages per topic:", 5);
+        int minMessages = AnsiConsole.Ask("Minimum messages per topic:", 2);
+
+        AnsiConsole.MarkupLine($"[cyan]✓ Using AI ({model}) for topic extraction[/]");
+        AnsiConsole.MarkupLine($"[dim]Topics will be extracted using AI analysis of conversation content.[/]");
+        AnsiConsole.WriteLine();
 
         Services.Visualization.NetworkGraphGenerator generator = 
-            new Services.Visualization.NetworkGraphGenerator(minMessages, maxTopics);
+            new Services.Visualization.NetworkGraphGenerator(analyzer, minMessages, maxTopics);
 
-        if (perContact)
+        try
         {
-            string outputDir = AnsiConsole.Ask("Output directory:", "./output/network-graphs");
-            
-            AnsiConsole.Status()
-                .Start("Generating per-contact network graphs...", ctx =>
-                {
-                    generator.GeneratePerContactGraphsAsync(_importedMessages, outputDir).Wait();
-                });
+            if (perContact)
+            {
+                string outputDir = AnsiConsole.Ask("Output directory:", "./output/network-graphs");
+                
+                AnsiConsole.Status()
+                    .Start("Generating per-contact network graphs with AI...", ctx =>
+                    {
+                        generator.GeneratePerContactGraphsAsync(_importedMessages, outputDir).Wait();
+                    });
+            }
+            else
+            {
+                string outputPath = AnsiConsole.Ask("Output file path:", "./output/network-graph.html");
+
+                AnsiConsole.Status()
+                    .Start("Generating network graph with AI...", ctx =>
+                    {
+                        generator.GenerateGraphAsync(_importedMessages, outputPath).Wait();
+                    });
+            }
         }
-        else
+        catch (Exception ex)
         {
-            string outputPath = AnsiConsole.Ask("Output file path:", "./output/network-graph.html");
-
-            AnsiConsole.Status()
-                .Start("Generating network graph...", ctx =>
-                {
-                    generator.GenerateGraphAsync(_importedMessages, outputPath).Wait();
-                });
+            AnsiConsole.MarkupLine($"[red]Error: {ex.Message}[/]");
+            Log.Error(ex, "Error generating network graph");
         }
 
         AnsiConsole.WriteLine("Press any key to continue...");
