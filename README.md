@@ -6,14 +6,17 @@ A flexible and extensible framework for exporting message data to various format
 
 ```
 SMSXmlToCsv.Core/
-├── Models/                  # Data models
-│   ├── Contact.cs          # Contact representation
-│   └── Message.cs          # Message representation
-├── Exporters/              # Exporter infrastructure
-│   ├── IDataExporter.cs    # Core exporter interface
-│   └── BaseDataExporter.cs # Abstract base class for exporters
-└── Utilities/              # Helper utilities
-    └── PathBuilder.cs      # Dynamic path generation with placeholders
+├── Models/                     # Data models
+│   ├── Contact.cs             # Contact representation
+│   ├── Message.cs             # Message representation
+│   └── ExportStrategy.cs      # Export strategy enumeration
+├── Exporters/                 # Exporter infrastructure
+│   ├── IDataExporter.cs       # Core exporter interface
+│   ├── BaseDataExporter.cs    # Abstract base class for exporters
+│   ├── CsvExporter.cs         # CSV format exporter
+│   └── ExportOrchestrator.cs  # Orchestrates exports with routing logic
+└── Utilities/                 # Helper utilities
+    └── PathBuilder.cs         # Dynamic path generation with placeholders
 ```
 
 ## Features
@@ -89,35 +92,52 @@ public class CsvExporter : BaseDataExporter
 
 ## Export Strategies
 
-The framework supports multiple export strategies:
+The framework supports multiple export strategies through the `ExportOrchestrator` class:
 
 ### All-in-One Export
-A single file containing messages from all selected contacts:
+Exports all messages to a single file, regardless of contact:
+
+```csharp
+var orchestrator = new ExportOrchestrator(new CsvExporter());
+await orchestrator.ExportAsync(messages, "exports", ExportStrategy.AllInOne);
+```
+
+Output structure:
 ```
 exports/
-└── all_messages_2025-11-05.csv
+└── messages_2025-11-05.csv  (contains all messages)
 ```
 
 ### Per-Contact Export
-Separate folders for each contact:
+Exports messages in separate files per contact, organized in contact-specific folders:
+
+```csharp
+var orchestrator = new ExportOrchestrator(new CsvExporter());
+await orchestrator.ExportAsync(messages, "exports", ExportStrategy.PerContact);
+```
+
+Output structure:
 ```
 exports/
 └── contacts/
     ├── John_Doe/
     │   └── messages_2025-11-05.csv
-    └── Jane_Smith/
+    ├── Jane_Smith/
+    │   └── messages_2025-11-05.csv
+    └── Unknown/  (for messages without a contact)
         └── messages_2025-11-05.csv
 ```
 
-### Structured Export with Media and Reports
-```
-exports/
-├── contacts/
-│   └── [contact folders]
-├── media/
-│   └── [media files]
-└── reports/
-    └── [summary reports]
+### Custom File Name Templates
+You can customize the output file names using placeholder templates:
+
+```csharp
+await orchestrator.ExportAsync(
+    messages, 
+    "exports", 
+    ExportStrategy.PerContact,
+    fileNameTemplate: "{contact_name}_backup_{datetime}"
+);
 ```
 
 ## Models
@@ -138,6 +158,57 @@ Represents a contact with properties:
 - `Name` - Display name
 - `PhoneNumber` - Phone number
 
+### ExportStrategy
+Enumeration defining export organization strategies:
+- `AllInOne` - Export all messages to a single file
+- `PerContact` - Export messages in separate files per contact
+
+## Complete Usage Example
+
+```csharp
+using SMSXmlToCsv.Core.Models;
+using SMSXmlToCsv.Core.Exporters;
+
+// Create sample data
+var contact1 = new Contact { Id = "1", Name = "John Doe", PhoneNumber = "+1234567890" };
+var contact2 = new Contact { Id = "2", Name = "Jane Smith", PhoneNumber = "+0987654321" };
+
+var messages = new List<Message>
+{
+    new Message 
+    { 
+        Id = "1", 
+        Contact = contact1, 
+        Body = "Hello from John",
+        Timestamp = DateTime.Now,
+        Type = "SMS",
+        IsSent = true,
+        PhoneNumber = contact1.PhoneNumber
+    },
+    new Message 
+    { 
+        Id = "2", 
+        Contact = contact2, 
+        Body = "Hi from Jane",
+        Timestamp = DateTime.Now,
+        Type = "SMS",
+        IsSent = false,
+        PhoneNumber = contact2.PhoneNumber
+    }
+};
+
+// Export using CSV format with per-contact strategy
+var csvExporter = new CsvExporter();
+var orchestrator = new ExportOrchestrator(csvExporter);
+
+await orchestrator.ExportAsync(
+    messages,
+    "output/exports",
+    ExportStrategy.PerContact,
+    fileNameTemplate: "conversation_{date}"
+);
+```
+
 ## Building and Testing
 
 ```bash
@@ -154,18 +225,32 @@ dotnet test --verbosity normal
 ## Test Coverage
 
 The framework includes comprehensive unit tests:
-- `PathBuilderTests` - 18 tests covering all placeholder scenarios and edge cases
-- `BaseDataExporterTests` - 9 tests covering exporter functionality and validation
+- **PathBuilderTests** - 18 tests covering all placeholder scenarios and edge cases
+- **BaseDataExporterTests** - 9 tests covering exporter functionality and validation
+- **CsvExporterTests** - 5 tests covering CSV export functionality and escaping
+- **ExportOrchestratorTests** - 7 tests covering export strategies and routing logic
 
-All tests pass successfully with 100% coverage of the core framework.
+**Total: 37 tests, all passing** ✅
+
+Tests validate:
+- Placeholder replacement for all date/time and contact fields
+- File name sanitization across platforms
+- CSV field escaping (commas, quotes, newlines)
+- All-in-one and per-contact export strategies
+- Orphaned message handling (messages without contacts)
+- Custom file name templates
+- Input validation and error handling
 
 ## Future Enhancements
 
-- Concrete exporter implementations (CSV, JSONL, HTML)
-- Configuration system for export settings
+- Additional format exporters (JSONL, HTML, XML)
+- Batch export capabilities for large datasets
 - Progress reporting for long-running exports
-- Batch export capabilities
+- Media file handling and organization
+- Report generation (statistics, summaries)
+- Configuration system for export settings
 - Custom placeholder support
+- Compression options for output files
 
 ## License
 
