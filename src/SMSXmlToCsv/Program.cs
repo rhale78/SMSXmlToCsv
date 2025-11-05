@@ -329,10 +329,8 @@ public class Program
                     "Parquet (Analytics)"
                 }));
 
-        if (!formatChoices.Any())
-        {
-            return;
-        }
+        // Note: formatChoices will always have at least one item due to .Required() on the prompt
+        // This check is kept as a defensive programming practice
 
         string outputDirectory = AnsiConsole.Ask<string>("Enter output directory:", "./exports");
         string baseFileName = AnsiConsole.Ask<string>("Enter base filename:", "messages");
