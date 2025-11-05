@@ -16,6 +16,25 @@ public class InstagramMessageImporter : IDataImporter
 {
     public string SourceName => "Instagram";
 
+    public bool CanImport(string sourcePath)
+    {
+        if (!Directory.Exists(sourcePath))
+        {
+            return false;
+        }
+
+        // Check for messages/inbox directory structure (similar to Facebook but with Instagram-specific markers)
+        string inboxPath1 = Path.Combine(sourcePath, "messages", "inbox");
+        string inboxPath2 = Path.Combine(sourcePath, "inbox");
+        
+        // Instagram exports might have a media folder or account_history.json
+        string mediaPath = Path.Combine(sourcePath, "media");
+        bool hasInbox = Directory.Exists(inboxPath1) || Directory.Exists(inboxPath2);
+        bool hasMedia = Directory.Exists(mediaPath);
+
+        return hasInbox && hasMedia;
+    }
+
     public async Task<IEnumerable<Message>> ImportAsync(string sourcePath)
     {
         List<Message> messages = new List<Message>();

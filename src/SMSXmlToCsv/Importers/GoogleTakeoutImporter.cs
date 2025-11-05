@@ -17,6 +17,23 @@ public class GoogleTakeoutImporter : IDataImporter
 {
     public string SourceName => "Google Takeout";
 
+    public bool CanImport(string sourcePath)
+    {
+        if (!Directory.Exists(sourcePath))
+        {
+            return false;
+        }
+
+        // Check for Hangouts.json
+        string hangoutsPath1 = Path.Combine(sourcePath, "Hangouts", "Hangouts.json");
+        string hangoutsPath2 = Path.Combine(sourcePath, "Hangouts.json");
+        
+        // Check for Google Voice directory
+        string voicePath = Path.Combine(sourcePath, "Voice", "Calls");
+
+        return File.Exists(hangoutsPath1) || File.Exists(hangoutsPath2) || Directory.Exists(voicePath);
+    }
+
     public async Task<IEnumerable<Message>> ImportAsync(string sourcePath)
     {
         List<Message> messages = new List<Message>();

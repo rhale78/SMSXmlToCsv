@@ -16,6 +16,28 @@ public class GoogleMailImporter : IDataImporter
 {
     public string SourceName => "Google Mail (Mbox)";
 
+    public bool CanImport(string sourcePath)
+    {
+        // Check if it's an mbox file
+        if (File.Exists(sourcePath) && sourcePath.EndsWith(".mbox", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // Check if it's a directory containing mbox files
+        if (Directory.Exists(sourcePath))
+        {
+            string mailPath = Path.Combine(sourcePath, "Mail");
+            if (Directory.Exists(mailPath))
+            {
+                return Directory.GetFiles(mailPath, "*.mbox").Any();
+            }
+            return Directory.GetFiles(sourcePath, "*.mbox").Any();
+        }
+
+        return false;
+    }
+
     public async Task<IEnumerable<Message>> ImportAsync(string sourcePath)
     {
         List<Message> messages = new List<Message>();

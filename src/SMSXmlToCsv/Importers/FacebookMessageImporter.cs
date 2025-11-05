@@ -16,6 +16,20 @@ public class FacebookMessageImporter : IDataImporter
 {
     public string SourceName => "Facebook Messenger";
 
+    public bool CanImport(string sourcePath)
+    {
+        if (!Directory.Exists(sourcePath))
+        {
+            return false;
+        }
+
+        // Check for messages/inbox directory structure
+        string inboxPath1 = Path.Combine(sourcePath, "messages", "inbox");
+        string inboxPath2 = Path.Combine(sourcePath, "inbox");
+
+        return Directory.Exists(inboxPath1) || Directory.Exists(inboxPath2);
+    }
+
     public async Task<IEnumerable<Message>> ImportAsync(string sourcePath)
     {
         List<Message> messages = new List<Message>();

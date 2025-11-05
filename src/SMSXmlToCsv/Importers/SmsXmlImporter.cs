@@ -16,6 +16,26 @@ public class SmsXmlImporter : IDataImporter
 {
     public string SourceName => "Android SMS Backup & Restore";
 
+    public bool CanImport(string sourcePath)
+    {
+        // Check if it's an XML file
+        if (!File.Exists(sourcePath) || !sourcePath.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        try
+        {
+            // Try to load and check for <smses> root element
+            XDocument doc = XDocument.Load(sourcePath);
+            return doc.Root?.Name.LocalName == "smses";
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     public async Task<IEnumerable<Message>> ImportAsync(string sourcePath)
     {
         List<Message> messages = new List<Message>();

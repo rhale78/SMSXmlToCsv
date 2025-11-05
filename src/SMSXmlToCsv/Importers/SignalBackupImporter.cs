@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using SMSXmlToCsv.Models;
 
@@ -29,6 +30,23 @@ namespace SMSXmlToCsv.Importers;
 public class SignalBackupImporter : IDataImporter
 {
     public string SourceName => "Signal Desktop Backup";
+
+    public bool CanImport(string sourcePath)
+    {
+        // Check for .backup file extension (Signal Desktop backups)
+        if (System.IO.File.Exists(sourcePath) && sourcePath.EndsWith(".backup", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // Check directory for .backup files
+        if (System.IO.Directory.Exists(sourcePath))
+        {
+            return System.IO.Directory.GetFiles(sourcePath, "*.backup").Any();
+        }
+
+        return false;
+    }
 
     public Task<IEnumerable<Message>> ImportAsync(string sourcePath)
     {

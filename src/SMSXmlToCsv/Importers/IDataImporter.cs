@@ -16,6 +16,13 @@ public interface IDataImporter
     string SourceName { get; }
 
     /// <summary>
+    /// Determines whether this importer can handle the specified source path.
+    /// </summary>
+    /// <param name="sourcePath">The path to check for compatibility.</param>
+    /// <returns>True if this importer can handle the source; otherwise, false.</returns>
+    bool CanImport(string sourcePath);
+
+    /// <summary>
     /// Asynchronously imports messages from a given file or directory path.
     /// </summary>
     /// <param name="sourcePath">The path to the data source file or directory.</param>
