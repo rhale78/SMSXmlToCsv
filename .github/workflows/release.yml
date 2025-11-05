@@ -1,0 +1,190 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on version tags like v0.7.0, v0.8.0, etc.
+workflow_dispatch:  # Allows manual trigger from GitHub UI
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    
+  steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+    dotnet-version: '9.0.x'
+        
+    - name: Restore dependencies
+      run: dotnet restore SMSXmlToCsv/SMSXmlToCsv.csproj
+ 
+- name: Build Release
+run: dotnet build SMSXmlToCsv/SMSXmlToCsv.csproj --configuration Release --no-restore
+      
+    - name: Publish Windows x64
+      run: dotnet publish SMSXmlToCsv/SMSXmlToCsv.csproj --configuration Release --runtime win-x64 --self-contained false --output ./publish/win-x64 -p:PublishReadyToRun=true
+      
+    - name: Publish Windows x64 (Self-Contained)
+ run: dotnet publish SMSXmlToCsv/SMSXmlToCsv.csproj --configuration Release --runtime win-x64 --self-contained true --output ./publish/win-x64-standalone -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+      
+    - name: Get version from tag
+      id: get_version
+      shell: pwsh
+      run: |
+if ($env:GITHUB_REF -match 'refs/tags/v(.+)') {
+  $version = $matches[1]
+        } else {
+          $version = "0.7.0"
+    }
+        echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+        echo "Version: $version"
+        
+    - name: Create Documentation Package
+   shell: pwsh
+      run: |
+        New-Item -Path "./publish/docs-package" -ItemType Directory -Force
+        Copy-Item -Path "README.md" -Destination "./publish/docs-package/"
+    Copy-Item -Path "CHANGELOG.md" -Destination "./publish/docs-package/"
+     Copy-Item -Path "LICENSE" -Destination "./publish/docs-package/"
+        Copy-Item -Path "QUICK_REFERENCE.md" -Destination "./publish/docs-package/"
+        Copy-Item -Path "docs" -Destination "./publish/docs-package/" -Recurse
+        Copy-Item -Path ".env.example" -Destination "./publish/docs-package/"
+        
+    - name: Create ZIP packages
+      shell: pwsh
+      run: |
+        $version = "${{ steps.get_version.outputs.VERSION }}"
+        
+  # Framework-dependent build (requires .NET 9.0 runtime)
+        Compress-Archive -Path "./publish/win-x64/*" -DestinationPath "./SMSXmlToCsv-v$version-win-x64.zip"
+        
+        # Self-contained build (includes runtime, larger file)
+     Compress-Archive -Path "./publish/win-x64-standalone/*" -DestinationPath "./SMSXmlToCsv-v$version-win-x64-standalone.zip"
+    
+        # Documentation package
+        Compress-Archive -Path "./publish/docs-package/*" -DestinationPath "./SMSXmlToCsv-v$version-docs.zip"
+        
+    - name: Generate SHA256 checksums
+      shell: pwsh
+      run: |
+    $version = "${{ steps.get_version.outputs.VERSION }}"
+        $files = @(
+          "SMSXmlToCsv-v$version-win-x64.zip",
+     "SMSXmlToCsv-v$version-win-x64-standalone.zip",
+          "SMSXmlToCsv-v$version-docs.zip"
+     )
+ 
+     $checksums = @()
+   foreach ($file in $files) {
+     $hash = (Get-FileHash -Path $file -Algorithm SHA256).Hash
+    $checksums += "$hash  $file"
+        }
+ 
+        $checksums | Out-File -FilePath "CHECKSUMS.txt" -Encoding UTF8
+        
+    - name: Create Release Notes
+      shell: pwsh
+      run: |
+        $version = "${{ steps.get_version.outputs.VERSION }}"
+   
+        $notes = @"
+# SMS Backup XML Converter v$version
+
+> ?? **VibeCoded Project**: Created using **Claude Sonnet 4.5** AI agent in **Visual Studio 2026**
+
+## ?? Download Options
+
+### Recommended: Framework-Dependent (Smaller, requires .NET 9.0)
+- **SMSXmlToCsv-v$version-win-x64.zip** (~5 MB)
+  - Requires [.NET 9.0 Runtime](https://dotnet.microsoft.com/download/dotnet/9.0)
+- Best for users who already have .NET installed
+
+### Alternative: Standalone (Larger, no requirements)
+- **SMSXmlToCsv-v$version-win-x64-standalone.zip** (~65 MB)
+  - Includes .NET runtime, no separate installation needed
+  - Best for users without .NET installed
+
+### Documentation Package
+- **SMSXmlToCsv-v$version-docs.zip**
+  - Complete documentation (README, guides, examples)
+  - Already included in application packages above
+
+## ?? Installation
+
+### Quick Start
+1. Download ``SMSXmlToCsv-v$version-win-x64.zip``
+2. Extract to a folder (e.g., ``C:\Tools\SMSXmlToCsv``)
+3. Install [.NET 9.0 Runtime](https://dotnet.microsoft.com/download/dotnet/9.0) if needed
+4. Run ``SMSXmlToCsv.exe``
+
+### Full Instructions
+See [Installation Guide](https://github.com/rhale78/SMSXmlToCsv/blob/main/docs/INSTALLATION.md)
+
+## ? What's New in v$version
+
+See [CHANGELOG.md](https://github.com/rhale78/SMSXmlToCsv/blob/main/CHANGELOG.md) for complete release notes.
+
+## ?? Quick Start
+
+``````bash
+# Interactive mode (recommended)
+SMSXmlToCsv.exe
+
+# Basic conversion
+SMSXmlToCsv.exe backup.xml --formats parquet
+
+# Full AI analysis
+SMSXmlToCsv.exe backup.xml --split enable --sentiment --network-graph --pdf-report
+``````
+
+## ?? Documentation
+
+- ?? [User Guide](https://github.com/rhale78/SMSXmlToCsv/blob/main/docs/USER_GUIDE.md) - Complete feature walkthrough
+- ?? [Configuration](https://github.com/rhale78/SMSXmlToCsv/blob/main/docs/CONFIGURATION.md) - All settings explained
+- ?? [Command-Line Reference](https://github.com/rhale78/SMSXmlToCsv/blob/main/docs/COMMAND_LINE.md) - Complete CLI options
+- ?? [Troubleshooting](https://github.com/rhale78/SMSXmlToCsv/blob/main/docs/TROUBLESHOOTING.md) - Problem solving
+- ? [FAQ](https://github.com/rhale78/SMSXmlToCsv/wiki/FAQ) - Frequently asked questions
+
+## ?? Security - SHA256 Checksums
+
+Verify your download integrity:
+
+``````
+See CHECKSUMS.txt in this release
+``````
+
+## ?? Support
+
+- ?? **Report Issues**: [GitHub Issues](https://github.com/rhale78/SMSXmlToCsv/issues)
+- ?? **Ask Questions**: [GitHub Discussions](https://github.com/rhale78/SMSXmlToCsv/discussions)
+- ?? **Read Docs**: [Complete Documentation](https://github.com/rhale78/SMSXmlToCsv/tree/main/docs)
+- ?? **Wiki**: [Quick Start & Guides](https://github.com/rhale78/SMSXmlToCsv/wiki)
+
+---
+
+**Made with ?? by AI | Version $version | October 2025**
+"@
+        
+        $notes | Out-File -FilePath "RELEASE_NOTES.md" -Encoding UTF8
+    
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        name: Release v${{ steps.get_version.outputs.VERSION }}
+   body_path: RELEASE_NOTES.md
+ files: |
+  SMSXmlToCsv-v${{ steps.get_version.outputs.VERSION }}-win-x64.zip
+          SMSXmlToCsv-v${{ steps.get_version.outputs.VERSION }}-win-x64-standalone.zip
+   SMSXmlToCsv-v${{ steps.get_version.outputs.VERSION }}-docs.zip
+          CHECKSUMS.txt
+        draft: false
+    prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2025 Randy Hale
+Copyright (c) 2025 SMS Backup XML Converter Contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,3 +19,15 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+PRIVACY NOTICE:
+This software processes personal SMS message data. Users are responsible for:
+- Ensuring proper handling of personal information
+- Complying with applicable privacy laws and regulations
+- Not sharing personal data in bug reports or contributions
+- Securing their own .env configuration files and data outputs
+
+The contributors and maintainers of this software are not responsible for any
+misuse of personal data or privacy violations by users of this software.
