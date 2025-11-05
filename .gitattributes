@@ -1,0 +1,27 @@
+# Auto detect text files and normalize line endings to LF
+* text=auto
+
+# Source code
+*.cs text diff=csharp
+*.csproj text
+*.sln text
+*.slnx text
+
+# Configuration files
+*.json text
+*.xml text
+*.config text
+.env text
+.env.* text
+.gitignore text
+.gitattributes text
+
+# Documentation
+*.md text
+*.txt text
+
+# Binary files
+*.dll binary
+*.exe binary
+*.pdb binary
+*.parquet binary
