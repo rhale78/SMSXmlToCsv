@@ -1,325 +1,209 @@
-﻿# SMS Backup XML Converter v0.7
+# SMSXmlToCsv
 
-**A comprehensive tool for converting Android SMS backup XML files to various formats with advanced analytics and AI-powered insights.**
+A comprehensive .NET 9 console application for importing, consolidating, and exporting messages from various messaging platforms. Convert your message history from Android SMS, Facebook Messenger, Instagram, Google Hangouts, Google Voice, Gmail, and more into multiple convenient formats.
 
-> ?? **VibeCoded Project**: This application was created exclusively using **Claude Sonnet 4.5** AI agent in **Visual Studio 2026**. The initial version (v0.7) was developed in just **3 days** of AI-assisted programming sessions.
+## Features
 
----
+### 🚀 Core Capabilities
 
-## ?? Quick Start
+- **Automatic Project Backup**: On every build, automatically backs up the project to a timestamped directory
+- **Unified Data Model**: All messages from different platforms are normalized into a consistent format
+- **Timezone Normalization**: All timestamps are converted to UTC for consistency
+- **Contact Management**: Supports multiple identifiers (phone numbers, emails) per contact
 
-```bash
-# Interactive mode (recommended for first-time users)
-SMSXmlToCsv.exe
+### 📥 Supported Import Sources
 
-# Basic conversion
-SMSXmlToCsv.exe backup.xml --formats parquet
+- **Android SMS Backup & Restore** - XML format (SMS and MMS)
+- **Facebook Messenger** - JSON data export
+- **Instagram Messages** - JSON data export
+- **Google Takeout** - Hangouts (JSON) and Voice (HTML)
+- **Gmail** - .mbox email archives
+- **Signal Desktop** - Placeholder (requires external decryption tools)
 
-# Full-featured with AI analysis (requires Ollama)
-SMSXmlToCsv.exe backup.xml --split enable --sentiment --network-graph --pdf-report
-```
+### 📤 Supported Export Formats
 
----
+- **CSV** - Comma-separated values for spreadsheet analysis
+- **JSONL** - JSON Lines format for efficient processing
+- **HTML** - Beautiful chat-like interface with styling
+- **Parquet** - Columnar format optimized for big data analytics
 
-## ? Key Features
+### 🎯 Export Strategies
 
-### Core Functionality
-- ? **Multi-format export**: CSV, JSON, Parquet, SQLite, HTML, Markdown, PostgreSQL, MySQL
-- ? **MMS extraction**: Automatically extract images, videos, and audio with organized folders
-- ? **Contact management**: Split by contact, merge duplicates, filter unknown contacts
-- ? **Date filtering**: Export specific time ranges
-- ? **Column selection**: Choose which fields to export
+- **All-in-One**: Single file containing all messages
+- **Per-Contact**: Separate files organized by contact in dedicated folders
 
-### Advanced Analytics
-- ?? **Thread analysis**: Detect conversation threads with timing
-- ?? **Response tracking**: Measure response patterns between contacts
-- ?? **Statistics**: Comprehensive messaging statistics and patterns
-- ?? **Search**: Interactive keyword search with highlighting
-
-### AI-Powered Features (Requires Ollama)
-- ?? **Sentiment analysis**: AI emotion detection per message
-- ?? **Topic detection**: Automatic conversation topic extraction
-- ?? **Network visualization**: Interactive D3.js graphs of contacts and topics
-- ?? **Clustering**: Group similar conversations intelligently
-- ?? **PDF reports**: Professional reports with charts and insights
-
----
-
-## ?? What Does It Do?
-
-This tool transforms Android SMS/MMS backup files (from apps like "SMS Backup & Restore") into structured, analyzable data. Originally a simple XML-to-CSV converter, it evolved into a comprehensive messaging analysis platform.
-
-### Example Output
+## Project Structure
 
 ```
-backup.xml
-??? Exports_2025-10-28_223045/
-    ??? backup.parquet         # Compressed data
-    ??? backup.csv      # Excel-friendly
-    ??? backup.db   # SQLite database
-    ??? Contacts/       # Per-contact exports
-    ?   ??? John_Smith_+1234/
-    ?   ?   ??? messages.html     # Chat-style view
-    ?   ?   ??? messages.parquet
-    ?   ?   ??? MMS/       # Extracted media
-    ?   ?       ??? photo_001.jpg
-    ?   ?       ??? video_001.mp4
-    ?   ??? Jane_Doe_+5678/
-    ?  ??? ...
-    ??? network_graph.html       # Interactive visualization
-    ??? network_graph.json
-    ??? sentiment_analysis.json
- ??? statistics.json
-    ??? statistics.md
-??? comprehensive_report.pdf   # Full analysis report
+SMSXmlToCsv/
+├── .github/
+│   └── workflows/
+│       └── dotnet-ci-cd.yml      # CI/CD automation
+├── src/
+│   └── SMSXmlToCsv/
+│       ├── Configuration/         # Configuration classes
+│       ├── Exporters/            # Data export implementations
+│       ├── Importers/            # Data import implementations
+│       ├── Models/               # Core data models
+│       ├── Services/             # Business logic and services
+│       ├── Program.cs            # Application entry point
+│       └── appsettings.json      # Configuration file
+├── SMSXmlToCsv.sln
+├── README.md
+└── LICENSE
 ```
 
----
+## Requirements
 
-## ?? Installation
+- .NET 9.0 SDK or Runtime
+- Visual Studio 2022 or later (optional, for development)
+- Supported platforms: Windows, Linux, macOS
 
-### Requirements
-- **.NET 9.0 Runtime** ([Download](https://dotnet.microsoft.com/download/dotnet/9.0))
-- **(Optional) Ollama** for AI features ([Download](https://ollama.ai))
+## Installation
 
-### Steps
+### Option 1: Download Pre-built Release
+1. Download the latest release for your platform from [Releases](../../releases)
+2. Extract the archive
+3. Run the executable
 
-1. **Download & Extract**:
-   ```bash
-   # Download from Releases page
-unzip SMSXmlToCsv-v0.7.zip
-   cd SMSXmlToCsv
-   ```
-
-2. **Configure (Optional)**:
-   ```bash
-   cp .env.example .env
-   # Edit .env with your name and phone
-   ```
-
-3. **Run**:
-   ```bash
-   SMSXmlToCsv.exe
-   ```
-
-### For AI Features
-
-```bash
-# Install Ollama from https://ollama.ai
-ollama pull llama3.2
-```
-
----
-
-## ?? Usage
-
-### Interactive Mode
-
-```bash
-SMSXmlToCsv.exe
-```
-
-The interactive menu guides you through:
-1. File selection (auto-detects XML files)
-2. Feature configuration (visual menus)
-3. Contact merging (intelligent duplicate detection)
-4. Output format selection
-5. Processing with real-time progress
-
-### Command-Line Examples
-
-```bash
-# Convert with date filter
-SMSXmlToCsv.exe backup.xml --date-from 2023-01-01 --date-to 2023-12-31
-
-# Extract MMS only
-SMSXmlToCsv.exe backup.xml --mms enable --split enable
-
-# Create searchable database
-SMSXmlToCsv.exe backup.xml --sqlite enable --split enable
-
-# Full analysis with AI
-SMSXmlToCsv.exe backup.xml --split enable --mms enable --sentiment --network-graph --pdf-report
-
-# Select specific contacts
-SMSXmlToCsv.exe backup.xml --select-contacts "John|+1234,Jane|+5678"
-
-# Export only specific columns
-SMSXmlToCsv.exe backup.xml --columns "FromName,ToName,DateTime,MessageText"
-```
-
----
-
-## ?? Configuration
-
-### Configuration Files
-
-1. **`.env`** - User identity (not tracked in git)
-   ```env
-   SMS_USER_NAME=YourName
-   SMS_USER_PHONE=+1234567890
-   ```
-
-2. **`appsettings.json`** - Feature defaults
-   ```json
-   {
-"Features": {
-       "ExtractMMS": "Ask",
-       "SplitByContact": "Enable",
-    "EnableFiltering": "Disable"
-     }
-   }
-   ```
-
-Priority: **Command-line > .env > appsettings.json > Interactive Menu**
-
-### Saving Configuration
-
-```bash
-# Save current settings for future runs
-SMSXmlToCsv.exe backup.xml --split enable --mms enable --save-config
-```
-
----
-
-## ?? Documentation
-
-Comprehensive documentation is available in the [`docs/`](docs/) folder:
-
-| Document | Description |
-|----------|-------------|
-| **[User Guide](docs/USER_GUIDE.md)** | Complete feature walkthrough |
-| **[Installation](docs/INSTALLATION.md)** | Detailed setup instructions |
-| **[Configuration](docs/CONFIGURATION.md)** | All settings explained with examples |
-| **[Command-Line Reference](docs/COMMAND_LINE.md)** | Complete CLI documentation |
-| **[Developer Guide](docs/DEVELOPER_GUIDE.md)** | Contributing and extending |
-| **[Technical Architecture](docs/TECHNICAL_ARCHITECTURE.md)** | System design |
-| **[Troubleshooting](docs/TROUBLESHOOTING.md)** | Common issues and solutions |
-| **[Known Issues](docs/KNOWN_ISSUES.md)** | Current limitations and bugs |
-
----
-
-## ?? Known Issues
-
-### Currently Known Problems
-
-1. **Icon Display (?? Issue)**:
-   - Emoji/icons may show as `?/?` or incorrect characters in Windows Console
-   - **Cause**: Limited Unicode support in Windows Console (cmd.exe)
-   - **Status**: NOT fixed by PowerShell 7+ or Windows Terminal in all cases
-   - **Workaround**: Visual appearance issue only - functionality not affected
-   - **Alternative**: Spectre.Console integration provides better emoji support where available
-
-2. **Performance (?? Issue)**:
-   - Network graphs with >50k messages can be slow
-   - AI features require significant CPU/RAM
-
-3. **Not Fully Tested**:
-   - PostgreSQL/MySQL exports have limited testing
-   - Batch processing mode is experimental
-   - Some MMS MIME types may not be recognized
-   - **Column selection feature is UNTESTED** - use with caution
-
-4. **AI Requirements**:
-   - Sentiment analysis requires Ollama (2-4 GB download)
-   - Topic detection needs internet for initial setup
-   - Clustering works best with English text
-
-See [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) for complete list and workarounds.
-
----
-
-## ?? Future Development
-
-### Planned Features (v0.8+)
-
-**Google Takeout Integration**:
-- Import Google Hangouts/Chat
-- Import Gmail conversations
-- Import Google Voice messages
-
-**Additional Platform Support**:
-- Apple iMessage/SMS backup import
-- Facebook Messenger export
-- Instagram DM export
-- Telegram export
-- Signal backup support
-
-**Enhanced Analytics**:
-- Conversation summary generation (AI)
-- Relationship strength scoring
-- Activity heat maps
-- Timeline visualizations
-
-**Visualization Improvements**:
-- Timeline views
-- Heat maps of messaging activity
-- Sentiment trend charts
-- Contact interaction matrices
-
-**Note**: WhatsApp support, emoji analysis, and multi-language features are not currently planned for near-term releases.
-
----
-
-## ?? Contributing
-
-Contributions are welcome! This project was AI-generated but benefits from human oversight and testing.
-
-### How to Contribute
-
-1. **Test**: Try the tool with various SMS backups
-2. **Report Issues**: Submit bugs with details
-3. **Documentation**: Improve guides and examples
-4. **Code**: Fix bugs or add features (see [CONTRIBUTING.md](CONTRIBUTING.md))
-
-### Development
-
+### Option 2: Build from Source
 ```bash
 git clone https://github.com/rhale78/SMSXmlToCsv.git
 cd SMSXmlToCsv
-dotnet restore
-dotnet build
+dotnet build --configuration Release
 ```
 
----
+## Usage
 
-## ?? License
+### Running the Application
 
-MIT License - see [LICENSE](LICENSE) file.
+```bash
+dotnet run --project src/SMSXmlToCsv
+```
 
-### Third-Party Dependencies
+Or run the compiled executable directly from `bin/Release/net9.0/`
 
-- QuestPDF (MIT) - PDF generation
-- Parquet.NET (MIT) - Parquet format
-- Spectre.Console (MIT) - Terminal UI
-- Serilog (Apache 2.0) - Logging
-- See [docs/THIRD_PARTY_LICENSES.md](docs/THIRD_PARTY_LICENSES.md) for complete list
+### Configuration
 
----
+The application is configured via `appsettings.json`:
 
-## ?? Acknowledgments
+```json
+{
+  "BackupSettings": {
+    "Enabled": true,
+    "BackupDirectory": "../../../Backups/{date}/{time}",
+    "ExcludedDirectories": [".git", ".github", "bin", "obj", ...],
+    "ExcludedFiles": ["*.tmp", "*.cache", "*.log"]
+  },
+  "Serilog": {
+    "MinimumLevel": "Information",
+    ...
+  }
+}
+```
 
-- **Claude (Anthropic)** - AI that wrote all the code
-- **Visual Studio 2026** - Development environment
-- **Ollama** - Local AI runtime
-- **SMS Backup & Restore** - Android backup app
-- Open-source community for excellent libraries
+#### Backup Path Placeholders
 
----
+- `{date}` - Current date (yyyy-MM-dd)
+- `{time}` - Current time (HH-mm-ss)
+- `{datetime}` - Combined date and time
+- `{project}` - Project name
+- `{contact_name}` - Contact name (for per-contact exports)
 
-## ?? Support
+## Architecture
 
-- **Issues**: [GitHub Issues](https://github.com/rhale78/SMSXmlToCsv/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/rhale78/SMSXmlToCsv/discussions)
-- **Wiki**: [Project Wiki](https://github.com/rhale78/SMSXmlToCsv/wiki) - Quick Start, FAQ, How-To Guides
-- **Documentation**: [Complete Docs](docs/) - Technical reference and detailed guides
+### Data Models
 
----
+- **Contact**: Represents a person with name, phone numbers, and emails
+- **Message**: Unified message structure with sender, recipient, timestamp, body, and attachments
+- **MediaAttachment**: Represents attached files (images, videos, audio)
+- **MessageDirection**: Enum for sent/received/unknown
 
-## ?? Star This Project
+### Pluggable Framework
 
-If you find this useful, please star it on GitHub to help others discover it!
+#### Importers
+Implement `IDataImporter` interface:
+```csharp
+public interface IDataImporter
+{
+    string SourceName { get; }
+    Task<IEnumerable<Message>> ImportAsync(string sourcePath);
+}
+```
 
----
+#### Exporters
+Implement `IDataExporter` interface:
+```csharp
+public interface IDataExporter
+{
+    string FileExtension { get; }
+    Task ExportAsync(IEnumerable<Message> messages, string outputDirectory, string baseFileName);
+}
+```
 
-**Made with ?? by AI | Version 0.7 | VibeCoded in 3 Days**
+## CI/CD
+
+The project includes automated CI/CD via GitHub Actions:
+
+- **Continuous Integration**: Builds and tests on every push and pull request
+- **Automated Releases**: Creates draft releases on merges to main
+- **Multi-Platform Builds**: Linux, Windows, and macOS executables
+- **Semantic Versioning**: Date-based versioning (vYYYY.MM.BUILD_NUMBER)
+
+## Development
+
+### Coding Standards
+
+This project follows strict coding standards:
+
+- ✅ **No `var` keyword**: Use explicit types for clarity
+- ✅ **Object-Oriented Design**: Modular, maintainable, and extensible
+- ✅ **One class per file**: Clear organization and easy navigation
+- ✅ **Minimal Program.cs**: Business logic in separate service classes
+- ✅ **Comprehensive logging**: Powered by Serilog
+- ✅ **Rich console UI**: Built with Spectre.Console
+
+### Adding a New Importer
+
+1. Create a new class implementing `IDataImporter`
+2. Parse the source data format
+3. Transform to unified `Message` model
+4. Handle errors gracefully
+
+### Adding a New Exporter
+
+1. Create a new class implementing `IDataExporter`
+2. Serialize messages to target format
+3. Follow naming conventions
+4. Handle empty datasets
+
+## Dependencies
+
+- **Spectre.Console** - Rich terminal UI
+- **Serilog** - Structured logging
+- **CsvHelper** - CSV serialization
+- **Parquet.Net** - Parquet file format
+- **MimeKit** - Email parsing
+- **HtmlAgilityPack** - HTML parsing
+- **Microsoft.Extensions.Configuration** - Configuration management
+
+## License
+
+See [LICENSE](LICENSE) file for details.
+
+## Contributing
+
+Contributions are welcome! Please:
+
+1. Fork the repository
+2. Create a feature branch
+3. Follow the coding standards
+4. Submit a pull request
+
+## Support
+
+For issues, questions, or feature requests, please [open an issue](../../issues).
+
+## Acknowledgments
+
+This project consolidates message data from various platforms, respecting user privacy and data ownership. All processing is done locally on your machine.
