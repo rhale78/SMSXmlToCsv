@@ -7,7 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.7.0] - 2025-10-28 (Current)
+## [2.0.0] - 2025-11-05 (Current)
+
+### 🎉 Major Release - Architecture Redesign & Code Reorganization
+
+This release represents a complete architectural overhaul focused on clean code, modularity, and maintainability.
+
+### ✨ Added
+- **Multiple Export Format Selection**
+  - Export to multiple formats simultaneously (CSV + HTML + Parquet, etc.)
+  - Progress tracking for each export
+  - Individual success/failure reporting per format
+  - User-friendly multi-select interface
+
+- **Legacy Code Archive**
+  - Moved v0.7-1.7 codebase to `/old/code/`
+  - Comprehensive legacy documentation in `/old/docs/`
+  - Feature comparison document (`/old/FEATURE_COMPARISON.md`)
+  - 13 GitHub issues created for feature porting roadmap
+  - No PII found in archived code or documentation
+
+- **New Documentation Structure**
+  - Updated main README with legacy code reference
+  - Created `/docs/` directory for current version
+  - Moved wiki pages to `/old/wiki/`
+  - Deployment guides archived to `/old/docs/`
+
+### 🏗️ Architecture Changes
+- **Pluggable Framework**: Clean importer/exporter interfaces
+- **Service-Oriented Design**: Business logic separated from UI
+- **One Class Per File**: Improved navigation and maintainability
+- **Explicit Types**: No `var` keyword for clarity
+- **Smaller Program.cs**: ~300 lines vs 1000+ in legacy
+
+### 📋 Legacy Features To Port
+See `ISSUES_TO_CREATE.md` for complete list:
+- Network graph visualization (high priority)
+- Contact merge functionality (high priority)
+- Command-line interface (high priority)
+- Thread analysis
+- Response time analysis
+- Interactive search
+- PDF report generation
+- And more...
+
+### 🔄 Migration Notes
+- Legacy code remains accessible in `/old/` directory
+- Current version is actively maintained in `/src/`
+- Both codebases fully documented
+
+---
+
+## [0.7.0] - 2025-10-28 (Legacy Archive)
 
 ### ?? Major Release - Documentation & Version Management
 
