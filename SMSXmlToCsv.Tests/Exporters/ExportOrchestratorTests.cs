@@ -10,7 +10,7 @@ public class ExportOrchestratorTests
     {
         // Arrange
         var exporter = new CsvExporter();
-        var orchestrator = new ExportOrchestrator(exporter);
+        var orchestrator = new ExportOrchestrator(exporter, showProgress: false);
         var contact1 = new Contact { Id = "1", Name = "John Doe", PhoneNumber = "+1234567890" };
         var contact2 = new Contact { Id = "2", Name = "Jane Smith", PhoneNumber = "+0987654321" };
         
@@ -54,7 +54,7 @@ public class ExportOrchestratorTests
     {
         // Arrange
         var exporter = new CsvExporter();
-        var orchestrator = new ExportOrchestrator(exporter);
+        var orchestrator = new ExportOrchestrator(exporter, showProgress: false);
         var contact1 = new Contact { Id = "1", Name = "John Doe", PhoneNumber = "+1234567890" };
         var contact2 = new Contact { Id = "2", Name = "Jane Smith", PhoneNumber = "+0987654321" };
         
@@ -112,7 +112,7 @@ public class ExportOrchestratorTests
     {
         // Arrange
         var exporter = new CsvExporter();
-        var orchestrator = new ExportOrchestrator(exporter);
+        var orchestrator = new ExportOrchestrator(exporter, showProgress: false);
         var contact1 = new Contact { Id = "1", Name = "John Doe", PhoneNumber = "+1234567890" };
         
         var messages = new List<Message>
@@ -154,7 +154,7 @@ public class ExportOrchestratorTests
     {
         // Arrange
         var exporter = new CsvExporter();
-        var orchestrator = new ExportOrchestrator(exporter);
+        var orchestrator = new ExportOrchestrator(exporter, showProgress: false);
         var messages = new List<Message>
         {
             new Message { Id = "1", Body = "Test", Timestamp = DateTime.Now, Contact = new Contact { Name = "Test" } }
@@ -187,7 +187,7 @@ public class ExportOrchestratorTests
     {
         // Arrange
         var exporter = new CsvExporter();
-        var orchestrator = new ExportOrchestrator(exporter);
+        var orchestrator = new ExportOrchestrator(exporter, showProgress: false);
 
         // Act & Assert
         await Assert.ThrowsAsync<ArgumentNullException>(() =>
@@ -199,7 +199,7 @@ public class ExportOrchestratorTests
     {
         // Arrange
         var exporter = new CsvExporter();
-        var orchestrator = new ExportOrchestrator(exporter);
+        var orchestrator = new ExportOrchestrator(exporter, showProgress: false);
         var messages = new List<Message>();
 
         // Act & Assert

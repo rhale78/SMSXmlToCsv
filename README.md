@@ -1,6 +1,6 @@
 # SMSXmlToCsv - Core Data Exporter Framework
 
-A flexible and extensible framework for exporting message data to various formats. This project provides a core infrastructure for transforming SMS/MMS message data into different file formats like CSV, JSONL, HTML, etc.
+A flexible and extensible framework for exporting message data to various formats. This project provides a core infrastructure for transforming SMS/MMS message data into different file formats like CSV, JSONL, Parquet, and more.
 
 ## Project Structure
 
@@ -14,12 +14,28 @@ SMSXmlToCsv.Core/
 │   ├── IDataExporter.cs       # Core exporter interface
 │   ├── BaseDataExporter.cs    # Abstract base class for exporters
 │   ├── CsvExporter.cs         # CSV format exporter
-│   └── ExportOrchestrator.cs  # Orchestrates exports with routing logic
+│   ├── JsonlExporter.cs       # JSON Lines format exporter
+│   ├── ParquetExporter.cs     # Apache Parquet format exporter
+│   └── ExportOrchestrator.cs  # Orchestrates exports with routing logic and progress tracking
 └── Utilities/                 # Helper utilities
     └── PathBuilder.cs         # Dynamic path generation with placeholders
 ```
 
 ## Features
+
+### Supported Export Formats
+
+1. **CSV** - Comma-separated values with proper field escaping
+2. **JSONL** - JSON Lines format (one JSON object per line)
+3. **Parquet** - Apache Parquet columnar binary format
+
+### Progress Tracking with Spectre.Console
+
+The framework includes beautiful console progress visualization using Spectre.Console:
+- Real-time progress bars during export
+- Colored status indicators (✓ for success, → for in-progress)
+- Contact-by-contact export feedback in per-contact mode
+- Summary information with file paths
 
 ### Core Exporter Interface
 
@@ -197,16 +213,34 @@ var messages = new List<Message>
     }
 };
 
-// Export using CSV format with per-contact strategy
-var csvExporter = new CsvExporter();
-var orchestrator = new ExportOrchestrator(csvExporter);
+// Export using different formats with per-contact strategy
 
-await orchestrator.ExportAsync(
-    messages,
-    "output/exports",
-    ExportStrategy.PerContact,
-    fileNameTemplate: "conversation_{date}"
-);
+// CSV Export with progress
+var csvExporter = new CsvExporter();
+var csvOrchestrator = new ExportOrchestrator(csvExporter, showProgress: true);
+await csvOrchestrator.ExportAsync(messages, "output/csv", ExportStrategy.PerContact);
+
+// JSONL Export
+var jsonlExporter = new JsonlExporter();
+var jsonlOrchestrator = new ExportOrchestrator(jsonlExporter, showProgress: true);
+await jsonlOrchestrator.ExportAsync(messages, "output/jsonl", ExportStrategy.AllInOne);
+
+// Parquet Export
+var parquetExporter = new ParquetExporter();
+var parquetOrchestrator = new ExportOrchestrator(parquetExporter, showProgress: true);
+await parquetOrchestrator.ExportAsync(messages, "output/parquet", ExportStrategy.PerContact);
+```
+
+### Progress Output Example
+
+When `showProgress: true`, you'll see colorful console output like:
+```
+Exporting 150 messages using PerContact strategy ━━━━━━━━━━━━━━━━━━━ 45% ⠙
+→ Exporting messages for John Doe (1/3)...
+✓ Exported 50 messages for John Doe
+→ Exporting messages for Jane Smith (2/3)...
+✓ Exported 75 messages for Jane Smith
+✓ Export completed to: output/exports
 ```
 
 ## Building and Testing
@@ -228,29 +262,40 @@ The framework includes comprehensive unit tests:
 - **PathBuilderTests** - 18 tests covering all placeholder scenarios and edge cases
 - **BaseDataExporterTests** - 9 tests covering exporter functionality and validation
 - **CsvExporterTests** - 5 tests covering CSV export functionality and escaping
+- **JsonlExporterTests** - 3 tests covering JSONL export and JSON validation
+- **ParquetExporterTests** - 3 tests covering Parquet export and file verification
 - **ExportOrchestratorTests** - 7 tests covering export strategies and routing logic
 
-**Total: 37 tests, all passing** ✅
+**Total: 43 tests, all passing** ✅
 
 Tests validate:
 - Placeholder replacement for all date/time and contact fields
 - File name sanitization across platforms
 - CSV field escaping (commas, quotes, newlines)
+- JSONL format validation and JSON serialization
+- Parquet file creation and structure validation
 - All-in-one and per-contact export strategies
 - Orphaned message handling (messages without contacts)
 - Custom file name templates
+- Progress tracking disabled during tests
 - Input validation and error handling
 
 ## Future Enhancements
 
-- Additional format exporters (JSONL, HTML, XML)
+- Additional format exporters (HTML, XML, Excel)
 - Batch export capabilities for large datasets
-- Progress reporting for long-running exports
 - Media file handling and organization
 - Report generation (statistics, summaries)
 - Configuration system for export settings
 - Custom placeholder support
 - Compression options for output files
+- Export filtering and search capabilities
+
+## Dependencies
+
+- **Spectre.Console** (0.53.0) - Beautiful console applications with progress bars
+- **Parquet.Net** (5.3.0) - Apache Parquet format support
+- **System.Text.Json** (9.0.10) - JSON serialization for JSONL format
 
 ## License
 
