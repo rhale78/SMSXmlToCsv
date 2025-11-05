@@ -92,12 +92,20 @@ public class ParquetExporter : IDataExporter
 
     private async Task CreateEmptyParquetFile(string filePath)
     {
+        // Use the same schema as the main export to ensure consistency
         ParquetSchema schema = new ParquetSchema(
             new DataField<string>("SourceApplication"),
             new DataField<string>("FromName"),
+            new DataField<string>("FromPhone"),
+            new DataField<string>("FromEmail"),
             new DataField<string>("ToName"),
+            new DataField<string>("ToPhone"),
+            new DataField<string>("ToEmail"),
             new DataField<DateTimeOffset>("TimestampUtc"),
-            new DataField<string>("Body")
+            new DataField<string>("Direction"),
+            new DataField<string>("Body"),
+            new DataField<int>("AttachmentCount"),
+            new DataField<string>("Attachments")
         );
 
         using FileStream fileStream = File.Create(filePath);

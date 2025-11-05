@@ -58,13 +58,9 @@ public class ExportPathBuilder
     private string SanitizeFileName(string fileName)
     {
         char[] invalidChars = Path.GetInvalidFileNameChars();
-        string sanitized = fileName;
-
-        foreach (char c in invalidChars)
-        {
-            sanitized = sanitized.Replace(c, '_');
-        }
-
-        return sanitized;
+        
+        // Use string.Join with Split for better performance
+        string[] parts = fileName.Split(invalidChars, StringSplitOptions.None);
+        return string.Join("_", parts);
     }
 }

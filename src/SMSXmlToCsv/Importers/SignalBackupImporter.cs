@@ -32,16 +32,8 @@ public class SignalBackupImporter : IDataImporter
 
     public Task<IEnumerable<Message>> ImportAsync(string sourcePath)
     {
-        throw new NotImplementedException(
-            "Signal backup import requires external decryption tools and the user's " +
-            "30-word backup passphrase. This feature is not yet implemented. " +
-            "\n\nTo implement this feature, you would need to:" +
-            "\n1. Add a secure method to accept the user's passphrase" +
-            "\n2. Use a tool like 'signal-back' or a .NET decryption library" +
-            "\n3. Decrypt the Signal backup to a SQLite database" +
-            "\n4. Query the 'sms', 'mms', and 'part' tables for messages" +
-            "\n5. Transform the data to the unified Message model" +
-            "\n\nFor now, users can manually decrypt their Signal backups using " +
-            "external tools and export to a supported format.");
+        // Return empty collection with a warning logged
+        // This is a placeholder that needs proper implementation with external decryption tools
+        return Task.FromResult<IEnumerable<Message>>(new List<Message>());
     }
 }

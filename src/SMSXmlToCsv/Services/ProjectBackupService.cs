@@ -102,7 +102,9 @@ public class ProjectBackupService
         {
             if (pattern.Contains("*"))
             {
-                string regexPattern = "^" + pattern.Replace(".", "\\.").Replace("*", ".*") + "$";
+                // Use proper regex escaping to prevent injection
+                string escapedPattern = System.Text.RegularExpressions.Regex.Escape(pattern);
+                string regexPattern = "^" + escapedPattern.Replace("\\*", ".*") + "$";
                 if (System.Text.RegularExpressions.Regex.IsMatch(fileName, regexPattern, 
                     System.Text.RegularExpressions.RegexOptions.IgnoreCase))
                 {

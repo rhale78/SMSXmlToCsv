@@ -20,13 +20,16 @@ public record MediaAttachment(
                 return string.Empty;
             }
 
-            int lastSlash = OriginalSourcePath.LastIndexOf('/');
-            int lastBackslash = OriginalSourcePath.LastIndexOf('\\');
-            int lastSeparator = Math.Max(lastSlash, lastBackslash);
-
-            return lastSeparator >= 0 
-                ? OriginalSourcePath.Substring(lastSeparator + 1) 
-                : OriginalSourcePath;
+            // Use Path.GetFileName for robust cross-platform path handling
+            try
+            {
+                return Path.GetFileName(OriginalSourcePath);
+            }
+            catch (ArgumentException)
+            {
+                // If path contains invalid characters, fall back to the original path
+                return OriginalSourcePath;
+            }
         }
     }
 }

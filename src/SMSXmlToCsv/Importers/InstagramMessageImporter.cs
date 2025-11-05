@@ -91,9 +91,17 @@ public class InstagramMessageImporter : IDataImporter
                 }
             }
         }
-        catch (Exception)
+        catch (JsonException)
         {
-            // Skip files that can't be parsed
+            // Skip files with invalid JSON format
+        }
+        catch (IOException)
+        {
+            // Skip files that can't be read
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Skip files without read permission
         }
 
         return messages;
