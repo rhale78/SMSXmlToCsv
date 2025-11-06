@@ -11,10 +11,14 @@ namespace SMSXmlToCsv.Importers;
 
 /// <summary>
 /// Imports messages from Google Takeout archives.
-/// Supports Google Hangouts (JSON) and Google Voice (HTML).
+/// Supports Google Hangouts (JSON), Google Chat Groups (JSON), and Google Voice (HTML).
 /// </summary>
 public class GoogleTakeoutImporter : IDataImporter
 {
+    // Threshold to determine if timestamp is in milliseconds vs seconds
+    // Timestamps greater than this value (year 2286 in seconds) are assumed to be milliseconds
+    private const long MILLISECONDS_THRESHOLD = 10_000_000_000L;
+
     public string SourceName => "Google Takeout";
 
     public bool CanImport(string sourcePath)
@@ -352,16 +356,8 @@ public class GoogleTakeoutImporter : IDataImporter
                 }
             }
 
-            // Convert timestamp - check if it's in milliseconds or seconds
-            DateTimeOffset timestamp;
-            if (timestampValue > 10000000000) // If > year 2286 in seconds, it's probably milliseconds
-            {
-                timestamp = DateTimeOffset.FromUnixTimeMilliseconds(timestampValue);
-            }
-            else
-            {
-                timestamp = DateTimeOffset.FromUnixTimeSeconds(timestampValue);
-            }
+            // Convert timestamp using helper method
+            DateTimeOffset timestamp = ParseTimestamp(timestampValue);
 
             // Get message text
             string messageText = string.Empty;
@@ -676,6 +672,26 @@ public class GoogleTakeoutImporter : IDataImporter
         catch (Exception)
         {
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Helper method to parse timestamp value and convert to DateTimeOffset.
+    /// Automatically handles both millisecond and second precision timestamps.
+    /// </summary>
+    /// <param name="timestampValue">Timestamp value (either seconds or milliseconds since Unix epoch)</param>
+    /// <returns>DateTimeOffset representing the timestamp</returns>
+    private static DateTimeOffset ParseTimestamp(long timestampValue)
+    {
+        // Check if timestamp is in milliseconds or seconds
+        // If value is greater than MILLISECONDS_THRESHOLD (year 2286 in seconds), it's probably milliseconds
+        if (timestampValue > MILLISECONDS_THRESHOLD)
+        {
+            return DateTimeOffset.FromUnixTimeMilliseconds(timestampValue);
+        }
+        else
+        {
+            return DateTimeOffset.FromUnixTimeSeconds(timestampValue);
         }
     }
 }

@@ -366,7 +366,11 @@ public class NetworkGraphGenerator
                 continue;
             }
 
-            string contactName = contactKey.Split('_')[0];
+            // Extract contact name safely - use last underscore to split since phone is always at the end
+            int lastUnderscoreIndex = contactKey.LastIndexOf('_');
+            string contactName = lastUnderscoreIndex > 0 
+                ? contactKey.Substring(0, lastUnderscoreIndex) 
+                : contactKey;
             string safeFileName = string.Join("_", contactName.Split(Path.GetInvalidFileNameChars()));
             string outputPath = Path.Combine(outputDirectory, $"network-{safeFileName}.html");
 
