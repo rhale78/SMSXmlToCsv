@@ -13,6 +13,32 @@ using Spectre.Console;
 namespace SMSXmlToCsv.Services.Visualization;
 
 /// <summary>
+/// Options for network graph generation
+/// </summary>
+public class NetworkGraphOptions
+{
+    /// <summary>
+    /// Include topics from both sent and received messages
+    /// </summary>
+    public bool IncludeBothSides { get; set; } = false;
+    
+    /// <summary>
+    /// Show links from user node to topics
+    /// </summary>
+    public bool IncludeUserLinks { get; set; } = true;
+    
+    /// <summary>
+    /// Extract named entities (people, dates, events, promises)
+    /// </summary>
+    public bool ExtractNamedEntities { get; set; } = true;
+    
+    /// <summary>
+    /// Use improved node spacing for better visualization
+    /// </summary>
+    public bool ImprovedSpacing { get; set; } = true;
+}
+
+/// <summary>
 /// Graph node for network visualization
 /// </summary>
 public class GraphNode
@@ -20,8 +46,9 @@ public class GraphNode
     public string Id { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public int MessageCount { get; set; }
-    public int Group { get; set; }  // 0 = user, 1 = contact, 2 = topic
+    public int Group { get; set; }  // 0 = user, 1 = contact, 2 = topic, 3 = person mentioned, 4 = date/event, 5 = promise
     public List<string> TopTopics { get; set; } = new List<string>();
+    public string? EntityType { get; set; }  // For named entities: "person", "date", "event", "promise", "relationship"
 }
 
 /// <summary>
@@ -43,10 +70,12 @@ public class NetworkGraphGenerator
     private const bool UNLIMITED_TOPICS_MODE = true;  // From legacy - works well
     private const int MIN_TOPIC_MESSAGES = 2;  // From legacy
     private readonly OllamaSentimentAnalyzer _ollamaAnalyzer;
+    private readonly NetworkGraphOptions _options;
 
-    public NetworkGraphGenerator(OllamaSentimentAnalyzer ollamaAnalyzer)
+    public NetworkGraphGenerator(OllamaSentimentAnalyzer ollamaAnalyzer, NetworkGraphOptions? options = null)
     {
         _ollamaAnalyzer = ollamaAnalyzer ?? throw new ArgumentNullException(nameof(ollamaAnalyzer));
+        _options = options ?? new NetworkGraphOptions();
     }
 
     /// <summary>
@@ -76,6 +105,7 @@ public class NetworkGraphGenerator
         // Group messages by contact (adapted from legacy)
         Dictionary<string, GraphNode> nodes = new Dictionary<string, GraphNode>();
         Dictionary<string, List<string>> contactMessages = new Dictionary<string, List<string>>();
+        Dictionary<string, List<string>> userMessages = new Dictionary<string, List<string>>();  // For two-sided processing
 
         // Create user node
         nodes["user"] = new GraphNode
@@ -87,7 +117,7 @@ public class NetworkGraphGenerator
         };
         System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Created user node: {userName}");
 
-        // Extract contacts and their messages
+        // Extract contacts and their messages (both sides if enabled)
         foreach (Message message in messageList)
         {
             string contactName = ExtractContactName(message, userName);
@@ -108,6 +138,10 @@ public class NetworkGraphGenerator
                     Group = 1
                 };
                 contactMessages[contactPhone] = new List<string>();
+                if (_options.IncludeBothSides)
+                {
+                    userMessages[contactPhone] = new List<string>();
+                }
 
                 Log.Debug("Contact: {ContactName} ({ContactPhone})", contactName, contactPhone);
                 System.Diagnostics.Debug.WriteLine($"[NET GRAPH] New contact: {contactName} ({contactPhone})");
@@ -118,12 +152,25 @@ public class NetworkGraphGenerator
             // Collect message text for topic extraction
             if (!string.IsNullOrWhiteSpace(message.Body))
             {
-                contactMessages[contactPhone].Add(message.Body);
+                if (message.Direction == MessageDirection.Received)
+                {
+                    // Messages from contact
+                    contactMessages[contactPhone].Add(message.Body);
+                }
+                else if (_options.IncludeBothSides && message.Direction == MessageDirection.Sent)
+                {
+                    // Messages from user (only if both sides enabled)
+                    userMessages[contactPhone].Add(message.Body);
+                }
             }
         }
 
         Log.Information("Found {ContactCount} unique contacts", nodes.Count - 1);
         System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Found {nodes.Count - 1} unique contacts");
+        if (_options.IncludeBothSides)
+        {
+            System.Diagnostics.Debug.WriteLine("[NET GRAPH] Two-sided processing enabled - analyzing sent and received messages");
+        }
 
         if (nodes.Count <= 1)
         {

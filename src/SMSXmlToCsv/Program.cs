@@ -794,9 +794,23 @@ public class Program
         AnsiConsole.MarkupLine($"[dim]Topics will be extracted using AI analysis of conversation content.[/]");
         AnsiConsole.WriteLine();
 
-        // Create generator with just the analyzer (constructor takes only analyzer now)
+        // Ask for network graph options
+        bool includeBothSides = AnsiConsole.Confirm("Include topics from YOUR sent messages? (may create busier graph)", defaultValue: false);
+        bool includeUserLinks = AnsiConsole.Confirm("Show links from YOU node to topics?", defaultValue: !includeBothSides);
+        bool extractEntities = AnsiConsole.Confirm("Extract named entities (people, dates, events)?", defaultValue: true);
+        
+        // Create generator options
+        var options = new Services.Visualization.NetworkGraphOptions
+        {
+            IncludeBothSides = includeBothSides,
+            IncludeUserLinks = includeUserLinks,
+            ExtractNamedEntities = extractEntities,
+            ImprovedSpacing = true
+        };
+
+        // Create generator with analyzer and options
         Services.Visualization.NetworkGraphGenerator generator = 
-            new Services.Visualization.NetworkGraphGenerator(analyzer);
+            new Services.Visualization.NetworkGraphGenerator(analyzer, options);
 
         try
         {
