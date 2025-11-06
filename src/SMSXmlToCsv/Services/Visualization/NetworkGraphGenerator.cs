@@ -55,17 +55,21 @@ public class NetworkGraphGenerator
     public async Task GenerateGraphAsync(IEnumerable<Message> messages, string outputPath, string userName = "You")
     {
         Log.Information("Generating network graph with AI topic detection (legacy algorithm)");
+        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Starting generation - Output: {outputPath}, User: {userName}");
 
         if (!await _ollamaAnalyzer.IsAvailableAsync())
         {
+            System.Diagnostics.Debug.WriteLine("[NET GRAPH] ERROR: Ollama not available");
             throw new InvalidOperationException("Ollama is not available. Install from: https://ollama.ai and run: ollama pull llama3.2");
         }
 
         List<Message> messageList = messages.ToList();
         Log.Information("Processing {MessageCount} messages for network graph", messageList.Count);
+        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Processing {messageList.Count} messages");
 
         if (messageList.Count == 0)
         {
+            System.Diagnostics.Debug.WriteLine("[NET GRAPH] ERROR: No messages to process");
             throw new InvalidOperationException("No messages available to generate network graph");
         }
 
@@ -81,6 +85,7 @@ public class NetworkGraphGenerator
             MessageCount = messageList.Count,
             Group = 0
         };
+        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Created user node: {userName}");
 
         // Extract contacts and their messages
         foreach (Message message in messageList)
@@ -105,6 +110,7 @@ public class NetworkGraphGenerator
                 contactMessages[contactPhone] = new List<string>();
 
                 Log.Debug("Contact: {ContactName} ({ContactPhone})", contactName, contactPhone);
+                System.Diagnostics.Debug.WriteLine($"[NET GRAPH] New contact: {contactName} ({contactPhone})");
             }
 
             nodes[contactPhone].MessageCount++;
@@ -117,6 +123,7 @@ public class NetworkGraphGenerator
         }
 
         Log.Information("Found {ContactCount} unique contacts", nodes.Count - 1);
+        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Found {nodes.Count - 1} unique contacts");
 
         if (nodes.Count <= 1)
         {
@@ -143,9 +150,10 @@ public class NetworkGraphGenerator
         int processed = 0;
         int totalContacts = contactMessages.Count;
         List<(string ContactName, int TopicCount)> topicResults = new List<(string, int)>();
+        List<(string ContactName, string TopicsPreview)> topicDetails = new List<(string, string)>();
         List<string> emptyResponseContacts = new List<string>();
         List<(string ContactName, string Error)> errorContacts = new List<(string, string)>();
-        List<string> allContacts = new List<string>(); // Track all contacts for final status
+
 
         // Use Status for the overall operation - NO logging or console output inside this block
         await AnsiConsole.Status()
@@ -176,6 +184,14 @@ public class NetworkGraphGenerator
                         {
                             // Store for logging later (outside Status context)
                             topicResults.Add((nodes[contactPhone].Name, contactTopics.Count));
+                            
+                            // Store topics summary for detailed logging
+                            string topicsPreview = string.Join(", ", contactTopics.Take(5));
+                            if (contactTopics.Count > 5)
+                            {
+                                topicsPreview += $" (and {contactTopics.Count - 5} more)";
+                            }
+                            topicDetails.Add((nodes[contactPhone].Name, topicsPreview));
 
                             nodes[contactPhone].TopTopics = UNLIMITED_TOPICS_MODE
                                 ? contactTopics.ToList()
@@ -215,33 +231,44 @@ public class NetworkGraphGenerator
                     {
                         errorContacts.Add((nodes[contactPhone].Name, ex.Message));
                     }
-
-                    // Track all contacts
-                    allContacts.Add(nodes[contactPhone].Name);
                 }
             });
 
         // Now safe to log results outside Status context
+        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Topic extraction completed - Success: {topicResults.Count}, Empty: {emptyResponseContacts.Count}, Errors: {errorContacts.Count}");
+        
         foreach ((string contactName, int topicCount) in topicResults)
         {
             Log.Information("Contact {ContactName}: Found {TopicCount} topics", contactName, topicCount);
+            System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Contact '{contactName}': Found {topicCount} topics");
+        }
+        
+        // Log detailed topics for debugging
+        foreach ((string contactName, string topicsPreview) in topicDetails)
+        {
+            Log.Debug("Topics for {ContactName}: {Topics}", contactName, topicsPreview);
+            System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Topics for '{contactName}': {topicsPreview}");
         }
 
         // Log warnings for empty responses
         foreach (string contactName in emptyResponseContacts)
         {
             Log.Warning("Empty AI response for contact: {ContactName}", contactName);
+            System.Diagnostics.Debug.WriteLine($"[NET GRAPH] WARNING: Empty AI response for '{contactName}'");
         }
 
         // Log errors
         foreach ((string contactName, string error) in errorContacts)
         {
             Log.Error("Failed to extract topics for contact {ContactName}: {Error}", contactName, error);
+            System.Diagnostics.Debug.WriteLine($"[NET GRAPH] ERROR: Failed for '{contactName}': {error}");
         }
 
         // Final status summary
         int totalProcessed = processed;
         int totalSkipped = totalContacts - processed;
+        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Summary - Processed: {processed}, Skipped: {totalSkipped}, Errors: {errorContacts.Count}");
+        
         AnsiConsole.MarkupLine($"[green]✓[/] Successfully processed {processed} contacts");
         if (totalSkipped > 0)
         {
@@ -298,11 +325,19 @@ public class NetworkGraphGenerator
 
         // Safe to use AnsiConsole.MarkupLine outside of Status context
         AnsiConsole.MarkupLine($"[cyan]✓ Found {validTopics.Count} topics across {nodes.Count - 1} contacts[/]");
+        
+        // Log final graph statistics
+        int contactNodes = nodes.Values.Count(n => n.Group == 1);
+        int topicNodes = nodes.Values.Count(n => n.Group == 2);
+        Log.Information("Network graph stats - Total Nodes: {TotalNodes} (User: 1, Contacts: {Contacts}, Topics: {Topics}), Links: {Links}", 
+            nodes.Count, contactNodes, topicNodes, links.Count);
+        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Final graph - Nodes: {nodes.Count} (User: 1, Contacts: {contactNodes}, Topics: {topicNodes}), Links: {links.Count}");
 
         // Generate HTML
         await GenerateHtmlAsync(nodes.Values.ToList(), links, outputPath);
 
         Log.Information("Network graph generated: {OutputPath}", outputPath);
+        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] HTML generated successfully: {outputPath}");
         AnsiConsole.MarkupLine($"[green]✓[/] Network graph saved to: {outputPath}");
     }
 
@@ -510,10 +545,21 @@ Do not include explanations, numbering, or extra formatting - just topics separa
 
     private string GenerateD3Html(List<GraphNode> nodes, List<GraphLink> links)
     {
-        JsonSerializerOptions options = new JsonSerializerOptions { WriteIndented = false };
+        // Use camelCase for JavaScript compatibility
+        JsonSerializerOptions options = new JsonSerializerOptions 
+        { 
+            WriteIndented = false,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        };
 
         string nodesJson = JsonSerializer.Serialize(nodes, options);
         string linksJson = JsonSerializer.Serialize(links, options);
+
+        // Log generated data for debugging
+        Log.Debug("Generated {NodeCount} nodes and {LinkCount} links for D3 visualization", nodes.Count, links.Count);
+        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] D3 Data - Nodes: {nodes.Count}, Links: {links.Count}");
+        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Nodes JSON sample: {(nodesJson.Length > 200 ? nodesJson.Substring(0, 200) + "..." : nodesJson)}");
+        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Links JSON sample: {(linksJson.Length > 200 ? linksJson.Substring(0, 200) + "..." : linksJson)}");
 
         return $@"<!DOCTYPE html>
 <html>
@@ -617,31 +663,31 @@ Do not include explanations, numbering, or extra formatting - just topics separa
             .attr('height', height);
 
         const simulation = d3.forceSimulation(data.nodes)
-            .force('link', d3.forceLink(data.links).id(d => d.Id).distance(d => Math.max(50, 200 - d.Value)))
+            .force('link', d3.forceLink(data.links).id(d => d.id).distance(d => Math.max(50, 200 - d.value)))
             .force('charge', d3.forceManyBody().strength(-300))
             .force('center', d3.forceCenter(width / 2, height / 2))
-            .force('collision', d3.forceCollide().radius(d => Math.sqrt(d.MessageCount) * 2 + 10));
+            .force('collision', d3.forceCollide().radius(d => Math.sqrt(d.messageCount) * 2 + 10));
 
         const link = svg.append('g')
             .selectAll('line')
             .data(data.links)
             .join('line')
             .attr('class', 'link')
-            .attr('stroke-width', d => Math.sqrt(d.Value));
+            .attr('stroke-width', d => Math.sqrt(d.value));
 
         const node = svg.append('g')
             .selectAll('circle')
             .data(data.nodes)
             .join('circle')
             .attr('class', 'node')
-            .attr('r', d => Math.max(5, Math.sqrt(d.MessageCount) * 2))
-            .attr('fill', d => d.Group === 0 ? '#4CAF50' : d.Group === 1 ? '#2196F3' : '#FF9800')
+            .attr('r', d => Math.max(5, Math.sqrt(d.messageCount) * 2))
+            .attr('fill', d => d.group === 0 ? '#4CAF50' : d.group === 1 ? '#2196F3' : '#FF9800')
             .call(d3.drag()
                 .on('start', dragstarted)
                 .on('drag', dragged)
                 .on('end', dragended))
             .on('click', (event, d) => {{
-                alert(`${{d.Name}}\\nMessages: ${{d.MessageCount}}\\nTopics: ${{d.TopTopics.join(', ')}}`);
+                alert(`${{d.name}}\\nMessages: ${{d.messageCount}}\\nTopics: ${{d.topTopics.join(', ')}}`);
             }});
 
         const label = svg.append('g')
@@ -649,9 +695,9 @@ Do not include explanations, numbering, or extra formatting - just topics separa
             .data(data.nodes)
             .join('text')
             .attr('class', 'node-label')
-            .text(d => d.Name)
+            .text(d => d.name)
             .attr('text-anchor', 'middle')
-            .attr('dy', d => Math.max(5, Math.sqrt(d.MessageCount) * 2) + 15);
+            .attr('dy', d => Math.max(5, Math.sqrt(d.messageCount) * 2) + 15);
 
         simulation.on('tick', () => {{
             link
