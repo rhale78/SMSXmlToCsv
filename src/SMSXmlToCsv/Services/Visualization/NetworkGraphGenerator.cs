@@ -108,9 +108,13 @@ public class NetworkGraphGenerator
         }
 
         // Group messages by contact (adapted from legacy)
+        // NOTE: Initialize fresh dictionaries to prevent data corruption between calls
         Dictionary<string, GraphNode> nodes = new Dictionary<string, GraphNode>();
         Dictionary<string, List<string>> contactMessages = new Dictionary<string, List<string>>();
         Dictionary<string, List<string>> userMessages = new Dictionary<string, List<string>>();  // For two-sided processing
+        
+        // First pass: group by contact name to merge duplicates
+        Dictionary<string, List<string>> contactPhonesByName = new Dictionary<string, List<string>>();
 
         // Create user node
         nodes["user"] = new GraphNode
@@ -136,7 +140,18 @@ public class NetworkGraphGenerator
             // Skip contacts with "Unknown" name if option is enabled
             if (_options.SkipUnknownContacts && contactName.Equals("Unknown", StringComparison.OrdinalIgnoreCase))
             {
+                System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Skipping unknown contact: {contactPhone}");
                 continue;
+            }
+
+            // Track phone numbers for each contact name to merge duplicates
+            if (!contactPhonesByName.ContainsKey(contactName))
+            {
+                contactPhonesByName[contactName] = new List<string>();
+            }
+            if (!contactPhonesByName[contactName].Contains(contactPhone))
+            {
+                contactPhonesByName[contactName].Add(contactPhone);
             }
 
             if (!nodes.ContainsKey(contactPhone))
@@ -172,6 +187,42 @@ public class NetworkGraphGenerator
                 {
                     // Messages from user (only if both sides enabled)
                     userMessages[contactPhone].Add(message.Body);
+                }
+            }
+        }
+
+        // Merge contacts with duplicate names
+        foreach (var nameGroup in contactPhonesByName.Where(kvp => kvp.Value.Count > 1))
+        {
+            string contactName = nameGroup.Key;
+            List<string> phones = nameGroup.Value;
+            string primaryPhone = phones[0];
+
+            Log.Information("Merging {PhoneCount} phone numbers for contact: {ContactName}", phones.Count, contactName);
+            System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Merging {phones.Count} phone numbers for contact: {contactName}");
+
+            // Merge messages from all phones into the primary phone
+            for (int i = 1; i < phones.Count; i++)
+            {
+                string otherPhone = phones[i];
+                
+                if (contactMessages.ContainsKey(otherPhone))
+                {
+                    contactMessages[primaryPhone].AddRange(contactMessages[otherPhone]);
+                    contactMessages.Remove(otherPhone);
+                }
+                
+                if (_options.IncludeBothSides && userMessages.ContainsKey(otherPhone))
+                {
+                    userMessages[primaryPhone].AddRange(userMessages[otherPhone]);
+                    userMessages.Remove(otherPhone);
+                }
+
+                // Merge message counts
+                if (nodes.ContainsKey(otherPhone))
+                {
+                    nodes[primaryPhone].MessageCount += nodes[otherPhone].MessageCount;
+                    nodes.Remove(otherPhone);
                 }
             }
         }
@@ -1179,6 +1230,8 @@ Do not include explanations, numbering, or extra formatting - just topics separa
             "relationships:",
             "main topics:",
             "topics:",
+            "regular topics:",
+            "regular topic:",
             "events:"
         };
 
@@ -1215,6 +1268,8 @@ Do not include explanations, numbering, or extra formatting - just topics separa
                upper == "MAIN TOPIC" ||
                upper == "TOPICS" ||
                upper == "TOPIC" ||
+               upper == "REGULAR TOPICS" ||
+               upper == "REGULAR TOPIC" ||
                upper == "EXAMPLES" ||
                upper == "EXAMPLE" ||
                upper.StartsWith("BASED ON") ||
