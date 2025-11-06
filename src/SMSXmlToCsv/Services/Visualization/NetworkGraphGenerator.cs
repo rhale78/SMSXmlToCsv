@@ -307,6 +307,96 @@ public class NetworkGraphGenerator
     }
 
     /// <summary>
+    /// Generate separate network graphs for each contact
+    /// </summary>
+    public async Task GeneratePerContactGraphsAsync(IEnumerable<Message> messages, string outputDirectory, string userName = "You")
+    {
+        Log.Information("Generating per-contact network graphs");
+
+        List<Message> messageList = messages.ToList();
+        
+        if (messageList.Count == 0)
+        {
+            throw new InvalidOperationException("No messages available to generate network graphs");
+        }
+
+        // Create output directory
+        if (!Directory.Exists(outputDirectory))
+        {
+            Directory.CreateDirectory(outputDirectory);
+        }
+
+        // Group messages by contact
+        Dictionary<string, List<Message>> messagesByContact = new Dictionary<string, List<Message>>();
+        
+        foreach (Message message in messageList)
+        {
+            string contactName = ExtractContactName(message, userName);
+            string contactPhone = ExtractContactPhone(message, userName);
+
+            if (string.IsNullOrEmpty(contactPhone) || contactPhone == "Unknown")
+            {
+                continue;
+            }
+
+            string contactKey = $"{contactName}_{contactPhone}";
+            
+            if (!messagesByContact.ContainsKey(contactKey))
+            {
+                messagesByContact[contactKey] = new List<Message>();
+            }
+
+            messagesByContact[contactKey].Add(message);
+        }
+
+        Log.Information("Found {ContactCount} contacts to process", messagesByContact.Count);
+
+        int processedCount = 0;
+        int skippedCount = 0;
+        
+        foreach (KeyValuePair<string, List<Message>> kvp in messagesByContact)
+        {
+            string contactKey = kvp.Key;
+            List<Message> contactMessages = kvp.Value;
+            
+            // Skip contacts with too few messages
+            if (contactMessages.Count < MIN_TOPIC_MESSAGES)
+            {
+                skippedCount++;
+                continue;
+            }
+
+            string contactName = contactKey.Split('_')[0];
+            string safeFileName = string.Join("_", contactName.Split(Path.GetInvalidFileNameChars()));
+            string outputPath = Path.Combine(outputDirectory, $"network-{safeFileName}.html");
+
+            try
+            {
+                AnsiConsole.MarkupLine($"[cyan]Generating graph for {contactName}... ({contactMessages.Count} messages)[/]");
+                
+                // Generate graph for this contact only
+                await GenerateGraphAsync(contactMessages, outputPath, userName);
+                
+                processedCount++;
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Failed to generate graph for contact {ContactName}", contactName);
+                AnsiConsole.MarkupLine($"[red]✗ Failed to generate graph for {contactName}: {ex.Message}[/]");
+            }
+        }
+
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine($"[green]✓ Generated {processedCount} network graphs[/]");
+        if (skippedCount > 0)
+        {
+            AnsiConsole.MarkupLine($"[yellow]! Skipped {skippedCount} contacts with insufficient messages (< {MIN_TOPIC_MESSAGES})[/]");
+        }
+        Log.Information("Per-contact network graphs completed: {ProcessedCount} generated, {SkippedCount} skipped", 
+            processedCount, skippedCount);
+    }
+
+    /// <summary>
     /// Extract contact name from Message (fixed version)
     /// </summary>
     private string ExtractContactName(Message message, string userName)

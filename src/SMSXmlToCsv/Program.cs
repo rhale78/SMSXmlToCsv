@@ -818,12 +818,12 @@ public class Program
         {
             if (perContact)
             {
-                AnsiConsole.MarkupLine("[yellow]Per-contact network graphs not yet implemented in new version[/]");
-                AnsiConsole.MarkupLine("[dim]Use 'Network Graph (All Contacts)' option instead[/]");
+                string outputDirectory = AnsiConsole.Ask("Output directory for per-contact graphs:", "./output/per-contact");
+                
+                string userName = AnsiConsole.Ask("Your name:", "You");
 
-                AnsiConsole.WriteLine("Press any key to continue...");
-                Console.ReadKey();
-                return;
+                // Generate per-contact graphs
+                generator.GeneratePerContactGraphsAsync(_importedMessages, outputDirectory, userName).Wait();
             }
             else
             {
@@ -831,11 +831,8 @@ public class Program
                 
                 string userName = AnsiConsole.Ask("Your name:", "You");
 
-                AnsiConsole.Status()
-                    .Start("Generating network graph with AI...", ctx =>
-                    {
-                        generator.GenerateGraphAsync(_importedMessages, outputPath, userName).Wait();
-                    });
+                // Don't wrap in Status here - GenerateGraphAsync has its own Status display
+                generator.GenerateGraphAsync(_importedMessages, outputPath, userName).Wait();
             }
 
             AnsiConsole.MarkupLine($"[green]✓ Network graph generated successfully![/]");
