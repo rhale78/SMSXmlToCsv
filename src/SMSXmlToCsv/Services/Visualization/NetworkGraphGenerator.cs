@@ -206,6 +206,7 @@ public class NetworkGraphGenerator
         await AnsiConsole.Status()
             .StartAsync("AI analyzing topics...", async ctx =>
             {
+                // Process contact messages
                 foreach (KeyValuePair<string, List<string>> contactKvp in contactMessages)
                 {
                     processed++;
@@ -218,7 +219,7 @@ public class NetworkGraphGenerator
                     }
 
                     // Update status - this is safe within Status context
-                    ctx.Status($"AI analyzing {processed}/{totalContacts}: {nodes[contactPhone].Name}");
+                    ctx.Status($"AI analyzing {processed}/{totalContacts}: {nodes[contactPhone].Name} (contact messages)");
 
                     contactTopicMessageCounts[contactPhone] = new Dictionary<string, int>();
 
@@ -226,7 +227,7 @@ public class NetworkGraphGenerator
                     {
                         // Extract topics using AI with batching support
                         Action<string> statusCallback = (status) => ctx.Status(status);
-                        List<string> contactTopics = await ExtractTopicsAsync(msgTexts, nodes[contactPhone].Name, statusCallback);
+                        List<string> contactTopics = await ExtractTopicsAsync(msgTexts, nodes[contactPhone].Name, statusCallback, _options.ExtractNamedEntities);
 
                         if (contactTopics.Count > 0)
                         {
@@ -278,6 +279,68 @@ public class NetworkGraphGenerator
                     catch (Exception ex)
                     {
                         errorContacts.Add((nodes[contactPhone].Name, ex.Message));
+                    }
+                }
+
+                // Process user messages if two-sided is enabled
+                if (_options.IncludeBothSides)
+                {
+                    Dictionary<string, int> userTopicMessageCounts = new Dictionary<string, int>();
+                    
+                    foreach (KeyValuePair<string, List<string>> userKvp in userMessages)
+                    {
+                        string contactPhone = userKvp.Key;
+                        List<string> msgTexts = userKvp.Value;
+
+                        if (msgTexts.Count < MIN_TOPIC_MESSAGES)
+                        {
+                            continue;
+                        }
+
+                        ctx.Status($"AI analyzing user messages with {nodes[contactPhone].Name}");
+
+                        try
+                        {
+                            Action<string> statusCallback = (status) => ctx.Status(status);
+                            List<string> userTopics = await ExtractTopicsAsync(msgTexts, userName, statusCallback, _options.ExtractNamedEntities);
+
+                            if (userTopics.Count > 0)
+                            {
+                                foreach (string topic in userTopics)
+                                {
+                                    int topicMessageCount = msgTexts.Count(m => m.IndexOf(topic, StringComparison.OrdinalIgnoreCase) >= 0);
+
+                                    if (topicMessageCount == 0)
+                                    {
+                                        topicMessageCount = Math.Max(1, msgTexts.Count / Math.Max(userTopics.Count, 1));
+                                    }
+
+                                    if (!topicToContacts.ContainsKey(topic))
+                                    {
+                                        topicToContacts[topic] = new HashSet<string>();
+                                        globalTopicFrequency[topic] = 0;
+                                    }
+
+                                    topicToContacts[topic].Add("user");
+                                    if (!userTopicMessageCounts.ContainsKey(topic))
+                                    {
+                                        userTopicMessageCounts[topic] = 0;
+                                    }
+                                    userTopicMessageCounts[topic] += topicMessageCount;
+                                    globalTopicFrequency[topic] += topicMessageCount;
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Debug("Error extracting user topics for {Contact}: {Error}", nodes[contactPhone].Name, ex.Message);
+                        }
+                    }
+
+                    // Store user topic counts for later use
+                    if (userTopicMessageCounts.Count > 0)
+                    {
+                        contactTopicMessageCounts["user"] = userTopicMessageCounts;
                     }
                 }
             });
@@ -355,9 +418,15 @@ public class NetworkGraphGenerator
                 Group = 2
             };
 
-            // Create links from contacts to topics
+            // Create links from contacts/user to topics
             foreach (string contactPhone in contactsDiscussingTopic)
             {
+                // Skip user-to-topic links if option is disabled
+                if (contactPhone == "user" && !_options.IncludeUserLinks)
+                {
+                    continue;
+                }
+
                 if (contactTopicMessageCounts.ContainsKey(contactPhone) &&
                     contactTopicMessageCounts[contactPhone].ContainsKey(topic))
                 {
@@ -522,7 +591,7 @@ public class NetworkGraphGenerator
     /// <summary>
     /// Extract topics using AI with batching for large message sets
     /// </summary>
-    private async Task<List<string>> ExtractTopicsAsync(List<string> messageTexts, string contactName, Action<string>? statusUpdate = null)
+    private async Task<List<string>> ExtractTopicsAsync(List<string> messageTexts, string contactName, Action<string>? statusUpdate = null, bool extractEntities = false)
     {
         if (messageTexts.Count < MIN_TOPIC_MESSAGES)
         {
@@ -534,7 +603,7 @@ public class NetworkGraphGenerator
         // For smaller message sets, process in one batch
         if (messageTexts.Count <= 100)
         {
-            return await ExtractTopicsBatchAsync(messageTexts, contactName, 1, 1);
+            return await ExtractTopicsBatchAsync(messageTexts, contactName, 1, 1, extractEntities);
         }
 
         // For larger sets, process in batches
@@ -565,7 +634,7 @@ public class NetworkGraphGenerator
                 batches.RemoveAll(t => t.IsCompleted);
             }
 
-            batches.Add(ExtractTopicsBatchAsync(batchMessages, contactName, batchNumber, totalBatches));
+            batches.Add(ExtractTopicsBatchAsync(batchMessages, contactName, batchNumber, totalBatches, extractEntities));
         }
 
         // Wait for all remaining batches to complete
@@ -604,7 +673,7 @@ public class NetworkGraphGenerator
     /// <summary>
     /// Extract topics from a single batch of messages
     /// </summary>
-    private async Task<List<string>> ExtractTopicsBatchAsync(List<string> batchMessages, string contactName, int batchNumber, int totalBatches)
+    private async Task<List<string>> ExtractTopicsBatchAsync(List<string> batchMessages, string contactName, int batchNumber, int totalBatches, bool extractEntities = false)
     {
         StringBuilder sb = new StringBuilder();
         sb.AppendLine($"Messages from conversation with {contactName} (batch {batchNumber}/{totalBatches}):");
@@ -614,12 +683,36 @@ public class NetworkGraphGenerator
             sb.AppendLine($"- {msg}");
         }
 
-        string prompt = $@"{sb}
+        string prompt;
+        if (extractEntities)
+        {
+            prompt = $@"{sb}
+
+Based on these messages, identify:
+1. Main topics discussed (e.g., work, family, vacation, hobbies, sports, travel)
+2. People mentioned by name (prefix with 'person:')
+3. Important dates or events (prefix with 'date:')
+4. Promises or commitments made (prefix with 'promise:')
+5. Relationships discussed (prefix with 'relationship:')
+
+Return ONLY a comma-separated list. Examples:
+- Topics: ""work, family, vacation""
+- People: ""person:John, person:Sarah""
+- Dates: ""date:birthday, date:anniversary""
+- Promises: ""promise:call back, promise:meet for coffee""
+- Relationships: ""relationship:friendship, relationship:colleague""
+
+Include as many relevant items as you can find. Do not include explanations, numbering, or extra formatting - just items separated by commas.";
+        }
+        else
+        {
+            prompt = $@"{sb}
 
 Based on these messages, identify the main topics discussed.
 Return ONLY a comma-separated list of single-word or short-phrase topics (e.g., ""work, family, vacation, plans, hobbies, weekend, dinner, movies, sports, travel"").
 Include as many relevant topics as you can find.
 Do not include explanations, numbering, or extra formatting - just topics separated by commas.";
+        }
 
         try
         {
@@ -816,7 +909,19 @@ Do not include explanations, numbering, or extra formatting - just topics separa
         </div>
         <div class=""legend-item"">
             <div class=""legend-color"" style=""background-color: #FF9800;""></div>
-            <span>Topics (with message counts)</span>
+            <span>Topics (with counts)</span>
+        </div>
+        <div class=""legend-item"">
+            <div class=""legend-color"" style=""background-color: #F44336;""></div>
+            <span>People Mentioned</span>
+        </div>
+        <div class=""legend-item"">
+            <div class=""legend-color"" style=""background-color: #9C27B0;""></div>
+            <span>Dates/Events</span>
+        </div>
+        <div class=""legend-item"">
+            <div class=""legend-color"" style=""background-color: #00BCD4;""></div>
+            <span>Promises</span>
         </div>
         <div style=""margin-top: 10px; font-size: 11px; color: #aaa;"">
             Click any node to highlight its connections
@@ -877,10 +982,10 @@ Do not include explanations, numbering, or extra formatting - just topics separa
         }};
 
         const simulation = d3.forceSimulation(data.nodes)
-            .force('link', d3.forceLink(data.links).id(d => d.id).distance(d => Math.max(50, 200 - d.value)))
-            .force('charge', d3.forceManyBody().strength(-300))
+            .force('link', d3.forceLink(data.links).id(d => d.id).distance(d => Math.max(100, 300 - d.value)))
+            .force('charge', d3.forceManyBody().strength(-800))
             .force('center', d3.forceCenter(width / 2, height / 2))
-            .force('collision', d3.forceCollide().radius(d => Math.sqrt(d.messageCount) * 2 + 10));
+            .force('collision', d3.forceCollide().radius(d => Math.sqrt(d.messageCount) * 3 + 30));
 
         const link = g.append('g')
             .selectAll('line')
@@ -895,7 +1000,15 @@ Do not include explanations, numbering, or extra formatting - just topics separa
             .join('circle')
             .attr('class', 'node')
             .attr('r', d => Math.max(5, Math.sqrt(d.messageCount) * 2))
-            .attr('fill', d => d.group === 0 ? '#4CAF50' : d.group === 1 ? '#2196F3' : '#FF9800')
+            .attr('fill', d => {{
+                if (d.group === 0) return '#4CAF50';  // User - green
+                if (d.group === 1) return '#2196F3';  // Contact - blue
+                if (d.group === 2) return '#FF9800';  // Topic - orange
+                if (d.group === 3) return '#F44336';  // Person mentioned - red
+                if (d.group === 4) return '#9C27B0';  // Date/event - purple
+                if (d.group === 5) return '#00BCD4';  // Promise - cyan
+                return '#999999';  // Unknown - gray
+            }})
             .call(d3.drag()
                 .on('start', dragstarted)
                 .on('drag', dragged)
