@@ -1137,9 +1137,6 @@ Do not include explanations, numbering, or extra formatting - just topics separa
     }
 
     /// <summary>
-    /// Parse entity type from prefixed topic strings and return appropriate group type
-    /// </summary>
-    /// <summary>
     /// Check if a string is a category label that should be filtered out
     /// </summary>
     private bool IsCategoryLabel(string text)
