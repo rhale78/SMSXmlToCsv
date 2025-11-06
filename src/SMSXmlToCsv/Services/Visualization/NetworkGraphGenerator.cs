@@ -481,16 +481,12 @@ public class NetworkGraphGenerator
             return new List<string>();
         }
 
-        // Sample messages for analysis (legacy approach)
-        int sampleSize = Math.Min(100, messageTexts.Count);
-        List<string> sample = messageTexts
-            .OrderBy(x => Guid.NewGuid())
-            .Take(sampleSize)
-            .ToList();
-
+        // Process ALL messages - no sampling limit
         StringBuilder sb = new StringBuilder();
         sb.AppendLine($"Messages from conversation with {contactName}:");
-        foreach (string msg in sample)
+        
+        // Include all messages for comprehensive topic extraction
+        foreach (string msg in messageTexts)
         {
             sb.AppendLine($"- {msg}");
         }
@@ -498,7 +494,8 @@ public class NetworkGraphGenerator
         string prompt = $@"{sb}
 
 Based on these messages, identify the main topics discussed.
-Return ONLY a comma-separated list of 5-15 single-word or short-phrase topics (e.g., ""work, family, vacation, plans, hobbies"").
+Return ONLY a comma-separated list of up to 250 single-word or short-phrase topics (e.g., ""work, family, vacation, plans, hobbies, weekend, dinner, movies, sports, travel"").
+Include as many relevant topics as you can find, aiming for comprehensive coverage.
 Do not include explanations, numbering, or extra formatting - just topics separated by commas.";
 
         try
@@ -518,6 +515,7 @@ Do not include explanations, numbering, or extra formatting - just topics separa
                 .Select(t => t.Trim().Trim('.', '-', '*', '•', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', ')', '(', '[', ']', '"', '\''))
                 .Where(t => !string.IsNullOrWhiteSpace(t) && t.Length > 2 && t.Length < 50)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(250)  // Limit to 250 topics per contact
                 .ToList();
 
             return topics;
@@ -582,15 +580,40 @@ Do not include explanations, numbering, or extra formatting - just topics separa
             stroke: #fff;
             stroke-width: 1.5px;
             cursor: pointer;
+            transition: opacity 0.3s;
+        }}
+        .node.highlighted {{
+            stroke: #ffff00;
+            stroke-width: 3px;
+        }}
+        .node.dimmed {{
+            opacity: 0.2;
         }}
         .link {{
             stroke: #999;
             stroke-opacity: 0.6;
+            transition: opacity 0.3s, stroke-width 0.3s;
+        }}
+        .link.highlighted {{
+            stroke: #ffff00;
+            stroke-opacity: 1;
+            stroke-width: 3px;
+        }}
+        .link.dimmed {{
+            opacity: 0.1;
         }}
         .node-label {{
             font-size: 12px;
             pointer-events: none;
             fill: #ffffff;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+        }}
+        .node-count {{
+            font-size: 10px;
+            font-weight: bold;
+            pointer-events: none;
+            fill: #ffffff;
+            text-anchor: middle;
             text-shadow: 0 1px 2px rgba(0,0,0,0.8);
         }}
         #info {{
@@ -609,6 +632,30 @@ Do not include explanations, numbering, or extra formatting - just topics separa
             background-color: rgba(0,0,0,0.8);
             padding: 15px;
             border-radius: 5px;
+        }}
+        #controls {{
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background-color: rgba(0,0,0,0.8);
+            padding: 10px;
+            border-radius: 5px;
+        }}
+        .control-btn {{
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 8px 16px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 12px;
+            margin: 2px;
+            cursor: pointer;
+            border-radius: 4px;
+        }}
+        .control-btn:hover {{
+            background-color: #45a049;
         }}
         .legend-item {{
             display: flex;
@@ -645,6 +692,12 @@ Do not include explanations, numbering, or extra formatting - just topics separa
             <span>Topics</span>
         </div>
     </div>
+    <div id=""controls"">
+        <button class=""control-btn"" onclick=""resetView()"">Reset View</button>
+        <button class=""control-btn"" onclick=""zoomIn()"">Zoom In</button>
+        <button class=""control-btn"" onclick=""zoomOut()"">Zoom Out</button>
+        <button class=""control-btn"" onclick=""clearHighlight()"">Clear Highlight</button>
+    </div>
     <svg id=""graph""></svg>
     <script>
         const data = {{
@@ -662,20 +715,51 @@ Do not include explanations, numbering, or extra formatting - just topics separa
             .attr('width', width)
             .attr('height', height);
 
+        // Create a group for zooming
+        const g = svg.append('g');
+
+        // Add zoom behavior
+        const zoom = d3.zoom()
+            .scaleExtent([0.1, 10])
+            .on('zoom', (event) => {{
+                g.attr('transform', event.transform);
+            }});
+        
+        svg.call(zoom);
+
+        // Zoom control functions
+        window.resetView = function() {{
+            svg.transition().duration(750).call(zoom.transform, d3.zoomIdentity);
+            clearHighlight();
+        }};
+        
+        window.zoomIn = function() {{
+            svg.transition().duration(300).call(zoom.scaleBy, 1.3);
+        }};
+        
+        window.zoomOut = function() {{
+            svg.transition().duration(300).call(zoom.scaleBy, 0.7);
+        }};
+
+        window.clearHighlight = function() {{
+            d3.selectAll('.node').classed('highlighted', false).classed('dimmed', false);
+            d3.selectAll('.link').classed('highlighted', false).classed('dimmed', false);
+        }};
+
         const simulation = d3.forceSimulation(data.nodes)
             .force('link', d3.forceLink(data.links).id(d => d.id).distance(d => Math.max(50, 200 - d.value)))
             .force('charge', d3.forceManyBody().strength(-300))
             .force('center', d3.forceCenter(width / 2, height / 2))
             .force('collision', d3.forceCollide().radius(d => Math.sqrt(d.messageCount) * 2 + 10));
 
-        const link = svg.append('g')
+        const link = g.append('g')
             .selectAll('line')
             .data(data.links)
             .join('line')
             .attr('class', 'link')
             .attr('stroke-width', d => Math.sqrt(d.value));
 
-        const node = svg.append('g')
+        const node = g.append('g')
             .selectAll('circle')
             .data(data.nodes)
             .join('circle')
@@ -686,11 +770,61 @@ Do not include explanations, numbering, or extra formatting - just topics separa
                 .on('start', dragstarted)
                 .on('drag', dragged)
                 .on('end', dragended))
-            .on('click', (event, d) => {{
-                alert(`${{d.name}}\\nMessages: ${{d.messageCount}}\\nTopics: ${{d.topTopics.join(', ')}}`);
+            .on('click', (event, clickedNode) => {{
+                event.stopPropagation();
+                
+                // Clear previous highlights
+                clearHighlight();
+                
+                // Find all connected nodes and links
+                const connectedNodeIds = new Set([clickedNode.id]);
+                const connectedLinks = data.links.filter(l => {{
+                    const sourceId = l.source.id || l.source;
+                    const targetId = l.target.id || l.target;
+                    if (sourceId === clickedNode.id) {{
+                        connectedNodeIds.add(targetId);
+                        return true;
+                    }}
+                    if (targetId === clickedNode.id) {{
+                        connectedNodeIds.add(sourceId);
+                        return true;
+                    }}
+                    return false;
+                }});
+                
+                // Highlight connected nodes and dim others
+                node.classed('highlighted', n => connectedNodeIds.has(n.id))
+                    .classed('dimmed', n => !connectedNodeIds.has(n.id));
+                
+                // Highlight connected links and dim others
+                link.classed('highlighted', l => {{
+                    const sourceId = l.source.id || l.source;
+                    const targetId = l.target.id || l.target;
+                    return sourceId === clickedNode.id || targetId === clickedNode.id;
+                }})
+                .classed('dimmed', l => {{
+                    const sourceId = l.source.id || l.source;
+                    const targetId = l.target.id || l.target;
+                    return sourceId !== clickedNode.id && targetId !== clickedNode.id;
+                }});
+                
+                // Show info
+                const topicsText = clickedNode.topTopics && clickedNode.topTopics.length > 0 
+                    ? clickedNode.topTopics.join(', ') 
+                    : 'None';
+                alert(`${{clickedNode.name}}\\nMessages: ${{clickedNode.messageCount}}\\nConnections: ${{connectedLinks.length}}\\nTopics: ${{topicsText}}`);
             }});
 
-        const label = svg.append('g')
+        // Add message count labels on topic nodes
+        const nodeCount = g.append('g')
+            .selectAll('text')
+            .data(data.nodes.filter(d => d.group === 2))
+            .join('text')
+            .attr('class', 'node-count')
+            .text(d => d.messageCount)
+            .attr('dy', 4);
+
+        const label = g.append('g')
             .selectAll('text')
             .data(data.nodes)
             .join('text')
@@ -709,6 +843,10 @@ Do not include explanations, numbering, or extra formatting - just topics separa
             node
                 .attr('cx', d => d.x)
                 .attr('cy', d => d.y);
+
+            nodeCount
+                .attr('x', d => d.x)
+                .attr('y', d => d.y);
 
             label
                 .attr('x', d => d.x)

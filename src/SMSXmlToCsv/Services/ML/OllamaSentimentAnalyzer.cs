@@ -52,14 +52,14 @@ public class OllamaSentimentAnalyzer
     // Recommended models for sentiment analysis
     public static readonly List<string> RecommendedModels = new List<string>
     {
-        "llama3.2:latest",      // Good balance of speed and accuracy
-        "llama3.1:latest",      // Larger, more accurate
-        "mistral:latest",       // Fast and efficient
-        "phi3:latest",          // Lightweight, good for sentiment
-        "gemma2:latest"         // Google's efficient model
+        "llama3.2",      // Good balance of speed and accuracy
+        "llama3.1",      // Larger, more accurate
+        "mistral",       // Fast and efficient
+        "phi3",          // Lightweight, good for sentiment
+        "gemma2"         // Google's efficient model
     };
 
-    public OllamaSentimentAnalyzer(string model = "llama3.2:latest", string baseUrl = "http://localhost:11434")
+    public OllamaSentimentAnalyzer(string model = "llama3.2", string baseUrl = "http://localhost:11434")
     {
         _model = model;
         _baseUrl = baseUrl;
