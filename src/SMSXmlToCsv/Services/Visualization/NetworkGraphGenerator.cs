@@ -36,143 +36,268 @@ public class GraphLink
 
 /// <summary>
 /// Generates interactive D3.js network graphs showing contact and topic relationships
+/// Adapted from working legacy code
 /// </summary>
 public class NetworkGraphGenerator
 {
-    private readonly int _minTopicMessages;
-    private readonly int _maxTopicsPerContact;
+    private const bool UNLIMITED_TOPICS_MODE = true;  // From legacy - works well
+    private const int MIN_TOPIC_MESSAGES = 2;  // From legacy
     private readonly OllamaSentimentAnalyzer _ollamaAnalyzer;
 
-    public NetworkGraphGenerator(
-        OllamaSentimentAnalyzer ollamaAnalyzer,
-        int minTopicMessages = 2,
-        int maxTopicsPerContact = 250)
+    public NetworkGraphGenerator(OllamaSentimentAnalyzer ollamaAnalyzer)
     {
-        _minTopicMessages = minTopicMessages;
-        _maxTopicsPerContact = maxTopicsPerContact;
-        _ollamaAnalyzer = ollamaAnalyzer ?? throw new ArgumentNullException(nameof(ollamaAnalyzer),
-            "Ollama analyzer is required for AI-based topic extraction");
+        _ollamaAnalyzer = ollamaAnalyzer ?? throw new ArgumentNullException(nameof(ollamaAnalyzer));
     }
 
     /// <summary>
-    /// Generate network graph for all contacts
+    /// Generate network graph for all contacts (from legacy code approach)
     /// </summary>
     public async Task GenerateGraphAsync(IEnumerable<Message> messages, string outputPath, string userName = "You")
     {
-        Log.Information("Generating network graph with AI-based topic extraction ({MaxTopics} topics per contact)", _maxTopicsPerContact);
+        Log.Information("Generating network graph with AI topic detection (legacy algorithm)");
 
-        // Check if Ollama is available
         if (!await _ollamaAnalyzer.IsAvailableAsync())
         {
-            throw new InvalidOperationException("Ollama is not available. Please ensure Ollama is running. Install from: https://ollama.ai");
+            throw new InvalidOperationException("Ollama is not available. Install from: https://ollama.ai and run: ollama pull llama3.2");
         }
 
         List<Message> messageList = messages.ToList();
+        Log.Information("Processing {MessageCount} messages for network graph", messageList.Count);
+
+        if (messageList.Count == 0)
+        {
+            throw new InvalidOperationException("No messages available to generate network graph");
+        }
+
+        // Group messages by contact (adapted from legacy)
         Dictionary<string, GraphNode> nodes = new Dictionary<string, GraphNode>();
-        List<GraphLink> links = new List<GraphLink>();
+        Dictionary<string, List<string>> contactMessages = new Dictionary<string, List<string>>();
 
         // Create user node
-        string userId = "user";
-        nodes[userId] = new GraphNode
+        nodes["user"] = new GraphNode
         {
-            Id = userId,
+            Id = "user",
             Name = userName,
             MessageCount = messageList.Count,
             Group = 0
         };
 
-        // Create contact nodes and links
-        Dictionary<string, List<Message>> contactMessages = new Dictionary<string, List<Message>>();
-
+        // Extract contacts and their messages
         foreach (Message message in messageList)
         {
-            string contactName = GetContactName(message);
+            string contactName = ExtractContactName(message, userName);
+            string contactPhone = ExtractContactPhone(message, userName);
 
-            if (!nodes.ContainsKey(contactName))
+            if (string.IsNullOrEmpty(contactPhone) || contactPhone == "Unknown")
             {
-                nodes[contactName] = new GraphNode
+                continue; // Skip invalid contacts
+            }
+
+            if (!nodes.ContainsKey(contactPhone))
+            {
+                nodes[contactPhone] = new GraphNode
                 {
-                    Id = contactName,
+                    Id = contactPhone,
                     Name = contactName,
                     MessageCount = 0,
                     Group = 1
                 };
-                contactMessages[contactName] = new List<Message>();
+                contactMessages[contactPhone] = new List<string>();
+
+                Log.Debug("Contact: {ContactName} ({ContactPhone})", contactName, contactPhone);
             }
 
-            nodes[contactName].MessageCount++;
-            contactMessages[contactName].Add(message);
+            nodes[contactPhone].MessageCount++;
 
-            // Create or update link
-            GraphLink? link = links.FirstOrDefault(l => l.Source == userId && l.Target == contactName);
-            if (link == null)
+            // Collect message text for topic extraction
+            if (!string.IsNullOrWhiteSpace(message.Body))
             {
-                link = new GraphLink { Source = userId, Target = contactName, Value = 0 };
-                links.Add(link);
+                contactMessages[contactPhone].Add(message.Body);
             }
-            link.Value++;
         }
 
-        Log.Information("Created {NodeCount} contact nodes and {LinkCount} links", nodes.Count - 1, links.Count);
+        Log.Information("Found {ContactCount} unique contacts", nodes.Count - 1);
 
-        // Extract topics per contact using AI
-        int totalTopicsFound = 0;
-        await AnsiConsole.Status()
-            .StartAsync("Analyzing topics with AI...", async ctx =>
+        if (nodes.Count <= 1)
+        {
+            throw new InvalidOperationException("No contacts were extracted from messages!");
+        }
+
+        // Create user-to-contact links
+        List<GraphLink> links = new List<GraphLink>();
+        foreach (KeyValuePair<string, GraphNode> kvp in nodes.Where(n => n.Key != "user"))
+        {
+            links.Add(new GraphLink
             {
-                int processed = 0;
-                foreach (KeyValuePair<string, List<Message>> kvp in contactMessages)
+                Source = "user",
+                Target = kvp.Key,
+                Value = kvp.Value.MessageCount
+            });
+        }
+
+        // Topic extraction using AI (from legacy algorithm)
+        Dictionary<string, HashSet<string>> topicToContacts = new Dictionary<string, HashSet<string>>();
+        Dictionary<string, int> globalTopicFrequency = new Dictionary<string, int>();
+        Dictionary<string, Dictionary<string, int>> contactTopicMessageCounts = new Dictionary<string, Dictionary<string, int>>();
+
+        int processed = 0;
+        int totalContacts = contactMessages.Count;
+        List<(string ContactName, int TopicCount)> topicResults = new List<(string, int)>();
+        List<string> emptyResponseContacts = new List<string>();
+        List<(string ContactName, string Error)> errorContacts = new List<(string, string)>();
+        List<string> allContacts = new List<string>(); // Track all contacts for final status
+
+        // Use Status for the overall operation - NO logging or console output inside this block
+        await AnsiConsole.Status()
+            .StartAsync("AI analyzing topics...", async ctx =>
+            {
+                foreach (KeyValuePair<string, List<string>> contactKvp in contactMessages)
                 {
                     processed++;
-                    ctx.Status($"AI analyzing topics for contact {processed}/{contactMessages.Count}: {kvp.Key}");
+                    string contactPhone = contactKvp.Key;
+                    List<string> msgTexts = contactKvp.Value;
 
-                    List<Topic> topics = await ExtractTopicsWithAIAsync(kvp.Value, kvp.Key);
-
-                    Log.Information("Contact {ContactName}: Found {TopicCount} topics from {MessageCount} messages",
-                        kvp.Key, topics.Count, kvp.Value.Count);
-
-                    // Take up to max topics per contact
-                    nodes[kvp.Key].TopTopics = topics
-                        .Take(_maxTopicsPerContact)
-                        .Select(t => t.Name)
-                        .ToList();
-
-                    // Create topic nodes and links
-                    foreach (Topic topic in topics.Take(_maxTopicsPerContact))
+                    if (msgTexts.Count < MIN_TOPIC_MESSAGES)
                     {
-                        string topicId = $"topic_{topic.Name}";
+                        continue;
+                    }
 
-                        if (!nodes.ContainsKey(topicId))
+                    // Update status - this is safe within Status context
+                    ctx.Status($"AI analyzing {processed}/{totalContacts}: {nodes[contactPhone].Name}");
+
+                    contactTopicMessageCounts[contactPhone] = new Dictionary<string, int>();
+
+                    try
+                    {
+                        // Extract topics using AI (legacy approach)
+                        List<string> contactTopics = await ExtractTopicsAsync(msgTexts, nodes[contactPhone].Name);
+
+                        if (contactTopics.Count > 0)
                         {
-                            nodes[topicId] = new GraphNode
+                            // Store for logging later (outside Status context)
+                            topicResults.Add((nodes[contactPhone].Name, contactTopics.Count));
+
+                            nodes[contactPhone].TopTopics = UNLIMITED_TOPICS_MODE
+                                ? contactTopics.ToList()
+                                : contactTopics.Take(10).ToList();
+
+                            foreach (string topic in contactTopics)
                             {
-                                Id = topicId,
-                                Name = topic.Name,
-                                MessageCount = topic.MessageCount,
-                                Group = 2  // Topic group
-                            };
-                            totalTopicsFound++;
+                                // Count messages containing this topic
+                                int topicMessageCount = msgTexts.Count(m => m.IndexOf(topic, StringComparison.OrdinalIgnoreCase) >= 0);
+
+                                if (topicMessageCount == 0)
+                                {
+                                    topicMessageCount = Math.Max(1, msgTexts.Count / Math.Max(contactTopics.Count, 1));
+                                }
+
+                                if (!topicToContacts.ContainsKey(topic))
+                                {
+                                    topicToContacts[topic] = new HashSet<string>();
+                                    globalTopicFrequency[topic] = 0;
+                                }
+
+                                topicToContacts[topic].Add(contactPhone);
+                                if (!contactTopicMessageCounts[contactPhone].ContainsKey(topic))
+                                {
+                                    contactTopicMessageCounts[contactPhone][topic] = 0;
+                                }
+                                contactTopicMessageCounts[contactPhone][topic] += topicMessageCount;
+                                globalTopicFrequency[topic] += topicMessageCount;
+                            }
                         }
                         else
                         {
-                            // Update message count if topic already exists
-                            nodes[topicId].MessageCount += topic.MessageCount;
+                            emptyResponseContacts.Add(nodes[contactPhone].Name);
                         }
-
-                        // Create link from contact to topic
-                        GraphLink topicLink = new GraphLink
-                        {
-                            Source = kvp.Key,
-                            Target = topicId,
-                            Value = topic.MessageCount
-                        };
-                        links.Add(topicLink);
                     }
+                    catch (Exception ex)
+                    {
+                        errorContacts.Add((nodes[contactPhone].Name, ex.Message));
+                    }
+
+                    // Track all contacts
+                    allContacts.Add(nodes[contactPhone].Name);
                 }
             });
 
-        Log.Information("Created {TopicCount} topic nodes total", totalTopicsFound);
-        AnsiConsole.MarkupLine($"[cyan]Found {totalTopicsFound} unique topics across all contacts[/]");
+        // Now safe to log results outside Status context
+        foreach ((string contactName, int topicCount) in topicResults)
+        {
+            Log.Information("Contact {ContactName}: Found {TopicCount} topics", contactName, topicCount);
+        }
+
+        // Log warnings for empty responses
+        foreach (string contactName in emptyResponseContacts)
+        {
+            Log.Warning("Empty AI response for contact: {ContactName}", contactName);
+        }
+
+        // Log errors
+        foreach ((string contactName, string error) in errorContacts)
+        {
+            Log.Error("Failed to extract topics for contact {ContactName}: {Error}", contactName, error);
+        }
+
+        // Final status summary
+        int totalProcessed = processed;
+        int totalSkipped = totalContacts - processed;
+        AnsiConsole.MarkupLine($"[green]✓[/] Successfully processed {processed} contacts");
+        if (totalSkipped > 0)
+        {
+            AnsiConsole.MarkupLine($"[yellow]! Skipped {totalSkipped} contacts with insufficient messages[/]");
+        }
+        if (errorContacts.Count > 0)
+        {
+            AnsiConsole.MarkupLine($"[red]! Encountered errors for {errorContacts.Count} contacts see logs for details[/]");
+        }
+
+        // Filter and create topic nodes (from legacy)
+        List<KeyValuePair<string, HashSet<string>>> validTopics = UNLIMITED_TOPICS_MODE
+            ? topicToContacts
+                .Where(kvp => globalTopicFrequency[kvp.Key] >= MIN_TOPIC_MESSAGES)
+                .OrderByDescending(kvp => globalTopicFrequency[kvp.Key])
+                .ToList()
+            : topicToContacts
+                .Where(kvp => globalTopicFrequency[kvp.Key] > 0)
+                .OrderByDescending(kvp => globalTopicFrequency[kvp.Key])
+                .ToList();
+
+        Log.Information("Creating {TopicCount} topic nodes", validTopics.Count);
+
+        int topicNodeId = 1;
+        foreach (KeyValuePair<string, HashSet<string>> kvp in validTopics)
+        {
+            string topic = kvp.Key;
+            HashSet<string> contactsDiscussingTopic = kvp.Value;
+
+            string topicNodeIdStr = $"topic_{topicNodeId++}";
+            nodes[topicNodeIdStr] = new GraphNode
+            {
+                Id = topicNodeIdStr,
+                Name = topic,
+                MessageCount = globalTopicFrequency[topic],
+                Group = 2
+            };
+
+            // Create links from contacts to topics
+            foreach (string contactPhone in contactsDiscussingTopic)
+            {
+                if (contactTopicMessageCounts.ContainsKey(contactPhone) &&
+                    contactTopicMessageCounts[contactPhone].ContainsKey(topic))
+                {
+                    links.Add(new GraphLink
+                    {
+                        Source = contactPhone,
+                        Target = topicNodeIdStr,
+                        Value = contactTopicMessageCounts[contactPhone][topic]
+                    });
+                }
+            }
+        }
+
+        // Safe to use AnsiConsole.MarkupLine outside of Status context
+        AnsiConsole.MarkupLine($"[cyan]✓ Found {validTopics.Count} topics across {nodes.Count - 1} contacts[/]");
 
         // Generate HTML
         await GenerateHtmlAsync(nodes.Values.ToList(), links, outputPath);
@@ -182,99 +307,98 @@ public class NetworkGraphGenerator
     }
 
     /// <summary>
-    /// Generate network graph per contact
+    /// Extract contact name from Message (fixed version)
     /// </summary>
-    public async Task GeneratePerContactGraphsAsync(IEnumerable<Message> messages, string outputDirectory, string userName = "You")
+    private string ExtractContactName(Message message, string userName)
     {
-        Log.Information("Generating per-contact network graphs with AI");
-
-        // Check if Ollama is available
-        if (!await _ollamaAnalyzer.IsAvailableAsync())
+        // Determine the contact (the person who is NOT the user)
+        if (message.Direction == MessageDirection.Sent)
         {
-            throw new InvalidOperationException("Ollama is not available. Please ensure Ollama is running. Install from: https://ollama.ai");
+            // Sent message - contact is the recipient
+            return !string.IsNullOrEmpty(message.To?.Name) ? message.To.Name : "Unknown";
         }
-
-        // Group messages by contact
-        Dictionary<string, List<Message>> contactMessages = messages
-            .GroupBy(m => GetContactName(m))
-            .ToDictionary(g => g.Key, g => g.ToList());
-
-        Directory.CreateDirectory(outputDirectory);
-
-        int processed = 0;
-        int total = contactMessages.Count;
-
-        foreach (KeyValuePair<string, List<Message>> kvp in contactMessages)
+        else
         {
-            processed++;
-            AnsiConsole.MarkupLine($"[grey]AI analyzing {processed}/{total}: {kvp.Key}[/]");
-
-            string safeFileName = string.Join("_", kvp.Key.Split(Path.GetInvalidFileNameChars()));
-            string outputPath = Path.Combine(outputDirectory, $"network_{safeFileName}.html");
-
-            await GenerateSingleContactGraphAsync(kvp.Value, outputPath, userName, kvp.Key);
+            // Received message - contact is the sender
+            return !string.IsNullOrEmpty(message.From?.Name) ? message.From.Name : "Unknown";
         }
-
-        Log.Information("Generated {Count} per-contact network graphs", contactMessages.Count);
-        AnsiConsole.MarkupLine($"[green]✓[/] Generated {contactMessages.Count} network graphs in: {outputDirectory}");
     }
 
-    private async Task GenerateSingleContactGraphAsync(List<Message> messages, string outputPath, string userName, string contactName)
+    /// <summary>
+    /// Extract contact phone from Message (fixed version)
+    /// </summary>
+    private string ExtractContactPhone(Message message, string userName)
     {
-        Dictionary<string, GraphNode> nodes = new Dictionary<string, GraphNode>();
-        List<GraphLink> links = new List<GraphLink>();
-
-        // User node
-        nodes["user"] = new GraphNode
+        // Determine the contact phone (the phone that is NOT the user's)
+        if (message.Direction == MessageDirection.Sent)
         {
-            Id = "user",
-            Name = userName,
-            MessageCount = messages.Count,
-            Group = 0
-        };
-
-        // Contact node
-        nodes[contactName] = new GraphNode
+            // Sent message - contact is the recipient
+            return message.To?.PhoneNumbers?.FirstOrDefault() ?? "Unknown";
+        }
+        else
         {
-            Id = contactName,
-            Name = contactName,
-            MessageCount = messages.Count,
-            Group = 1
-        };
+            // Received message - contact is the sender
+            return message.From?.PhoneNumbers?.FirstOrDefault() ?? "Unknown";
+        }
+    }
 
-        // Link between user and contact
-        links.Add(new GraphLink
+    /// <summary>
+    /// Extract topics using AI (from legacy algorithm)
+    /// </summary>
+    private async Task<List<string>> ExtractTopicsAsync(List<string> messageTexts, string contactName)
+    {
+        if (messageTexts.Count < MIN_TOPIC_MESSAGES)
         {
-            Source = "user",
-            Target = contactName,
-            Value = messages.Count
-        });
-
-        // Extract topics using AI
-        List<Topic> topics = await ExtractTopicsWithAIAsync(messages, contactName);
-
-        foreach (Topic topic in topics.Take(_maxTopicsPerContact))
-        {
-            string topicId = $"topic_{topic.Name}";
-
-            nodes[topicId] = new GraphNode
-            {
-                Id = topicId,
-                Name = topic.Name,
-                MessageCount = topic.MessageCount,
-                Group = 2
-            };
-
-            // Link from contact to topic
-            links.Add(new GraphLink
-            {
-                Source = contactName,
-                Target = topicId,
-                Value = topic.MessageCount
-            });
+            return new List<string>();
         }
 
-        await GenerateHtmlAsync(nodes.Values.ToList(), links, outputPath);
+        // Sample messages for analysis (legacy approach)
+        int sampleSize = Math.Min(100, messageTexts.Count);
+        List<string> sample = messageTexts
+            .OrderBy(x => Guid.NewGuid())
+            .Take(sampleSize)
+            .ToList();
+
+        StringBuilder sb = new StringBuilder();
+        sb.AppendLine($"Messages from conversation with {contactName}:");
+        foreach (string msg in sample)
+        {
+            sb.AppendLine($"- {msg}");
+        }
+
+        string prompt = $@"{sb}
+
+Based on these messages, identify the main topics discussed.
+Return ONLY a comma-separated list of 5-15 single-word or short-phrase topics (e.g., ""work, family, vacation, plans, hobbies"").
+Do not include explanations, numbering, or extra formatting - just topics separated by commas.";
+
+        try
+        {
+            string response = await _ollamaAnalyzer.CallOllamaAsync(prompt);
+
+            if (string.IsNullOrWhiteSpace(response))
+            {
+                // Don't log here - we're inside Status context
+                // Just return empty list silently
+                return new List<string>();
+            }
+
+            // Parse response (legacy parsing logic)
+            List<string> topics = response
+                .Split(new[] { ',', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(t => t.Trim().Trim('.', '-', '*', '•', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', ')', '(', '[', ']', '"', '\''))
+                .Where(t => !string.IsNullOrWhiteSpace(t) && t.Length > 2 && t.Length < 50)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            return topics;
+        }
+        catch (Exception)
+        {
+            // Don't log here - we're inside Status context
+            // Just return empty list silently and let caller handle it
+            return new List<string>();
+        }
     }
 
     private async Task GenerateHtmlAsync(List<GraphNode> nodes, List<GraphLink> links, string outputPath)
@@ -292,11 +416,7 @@ public class NetworkGraphGenerator
 
     private string GenerateD3Html(List<GraphNode> nodes, List<GraphLink> links)
     {
-        // Serialize data to JSON
-        JsonSerializerOptions options = new JsonSerializerOptions
-        {
-            WriteIndented = false
-        };
+        JsonSerializerOptions options = new JsonSerializerOptions { WriteIndented = false };
 
         string nodesJson = JsonSerializer.Serialize(nodes, options);
         string linksJson = JsonSerializer.Serialize(links, options);
@@ -467,109 +587,12 @@ public class NetworkGraphGenerator
         }}
 
         function dragended(event) {{
-            if (!event.active) simulation.alphaTarget(0.3);
+            if (!event.active) simulation.alphaTarget(0);
             event.subject.fx = null;
             event.subject.fy = null;
         }}
     </script>
 </body>
 </html>";
-    }
-
-    private string GetContactName(Message message)
-    {
-        if (!string.IsNullOrEmpty(message.From?.Name))
-        {
-            return message.From.Name;
-        }
-
-        if (!string.IsNullOrEmpty(message.To?.Name))
-        {
-            return message.To.Name;
-        }
-
-        return "Unknown";
-    }
-
-    /// <summary>
-    /// Extract topics from messages using AI (Ollama)
-    /// </summary>
-    private async Task<List<Topic>> ExtractTopicsWithAIAsync(List<Message> messages, string contactName)
-    {
-        if (messages.Count == 0)
-        {
-            return new List<Topic>();
-        }
-
-        // Combine message bodies into conversation context
-        StringBuilder conversationBuilder = new StringBuilder();
-        conversationBuilder.AppendLine($"Conversation with {contactName}:");
-        conversationBuilder.AppendLine();
-
-        int messageCount = 0;
-        foreach (Message message in messages.Take(100))  // Limit to prevent token overflow
-        {
-            if (!string.IsNullOrWhiteSpace(message.Body))
-            {
-                conversationBuilder.AppendLine($"- {message.Body}");
-                messageCount++;
-            }
-        }
-
-        if (messageCount == 0)
-        {
-            return new List<Topic>();
-        }
-
-        string conversation = conversationBuilder.ToString();
-
-        // Ask AI to extract topics
-        string prompt = $@"{conversation}
-
-Based on the conversation above, identify the main topics discussed. 
-Return ONLY a comma-separated list of 5-15 single-word or short-phrase topics (e.g., ""work, family, vacation, plans, hobbies"").
-Do not include explanations or numbering, just the topics separated by commas.";
-
-        try
-        {
-            string response = await _ollamaAnalyzer.CallOllamaAsync(prompt);
-            
-            // Parse the response
-            List<string> topicNames = response
-                .Split(new[] { ',', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(t => t.Trim().Trim('.', '-', '*', '•', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', ')'))
-                .Where(t => !string.IsNullOrWhiteSpace(t) && t.Length > 2 && t.Length < 50)
-                .Distinct()
-                .Take(_maxTopicsPerContact)
-                .ToList();
-
-            List<Topic> topics = new List<Topic>();
-            foreach (string topicName in topicNames)
-            {
-                // Count how many messages mention this topic (approximate)
-                int count = messages.Count(m => 
-                    m.Body != null && m.Body.Contains(topicName, StringComparison.OrdinalIgnoreCase));
-
-                if (count == 0)
-                {
-                    count = Math.Max(1, messages.Count / Math.Max(1, topicNames.Count));  // Distribute evenly if not found
-                }
-
-                topics.Add(new Topic
-                {
-                    Name = topicName,
-                    MessageCount = count,
-                    Score = (double)count / messages.Count,
-                    Keywords = new List<string> { topicName }
-                });
-            }
-
-            return topics.OrderByDescending(t => t.MessageCount).ToList();
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Error extracting topics with AI for contact {ContactName}", contactName);
-            return new List<Topic>();
-        }
     }
 }

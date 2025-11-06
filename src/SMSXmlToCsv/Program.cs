@@ -806,38 +806,39 @@ public class Program
             return;
         }
 
-        int maxTopics = AnsiConsole.Ask("Maximum topics per contact:", 250);
-        int minMessages = AnsiConsole.Ask("Minimum messages per topic:", 2);
-
         AnsiConsole.MarkupLine($"[cyan]✓ Using AI ({model}) for topic extraction[/]");
         AnsiConsole.MarkupLine($"[dim]Topics will be extracted using AI analysis of conversation content.[/]");
         AnsiConsole.WriteLine();
 
+        // Create generator with just the analyzer (constructor takes only analyzer now)
         Services.Visualization.NetworkGraphGenerator generator = 
-            new Services.Visualization.NetworkGraphGenerator(analyzer, minMessages, maxTopics);
+            new Services.Visualization.NetworkGraphGenerator(analyzer);
 
         try
         {
             if (perContact)
             {
-                string outputDir = AnsiConsole.Ask("Output directory:", "./output/network-graphs");
-                
-                AnsiConsole.Status()
-                    .Start("Generating per-contact network graphs with AI...", ctx =>
-                    {
-                        generator.GeneratePerContactGraphsAsync(_importedMessages, outputDir).Wait();
-                    });
+                AnsiConsole.MarkupLine("[yellow]Per-contact network graphs not yet implemented in new version[/]");
+                AnsiConsole.MarkupLine("[dim]Use 'Network Graph (All Contacts)' option instead[/]");
+
+                AnsiConsole.WriteLine("Press any key to continue...");
+                Console.ReadKey();
+                return;
             }
             else
             {
                 string outputPath = AnsiConsole.Ask("Output file path:", "./output/network-graph.html");
+                
+                string userName = AnsiConsole.Ask("Your name:", "You");
 
                 AnsiConsole.Status()
                     .Start("Generating network graph with AI...", ctx =>
                     {
-                        generator.GenerateGraphAsync(_importedMessages, outputPath).Wait();
+                        generator.GenerateGraphAsync(_importedMessages, outputPath, userName).Wait();
                     });
             }
+
+            AnsiConsole.MarkupLine($"[green]✓ Network graph generated successfully![/]");
         }
         catch (Exception ex)
         {
