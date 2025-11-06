@@ -759,49 +759,49 @@ public class NetworkGraphGenerator
         {
             prompt = $@"{sb}
 
-Analyze these messages and extract the following, using the exact format shown:
+Analyze these messages and identify what was actually discussed in THIS conversation.
 
-REGULAR TOPICS (no prefix): work, family, vacation, hobbies, sports, travel, health, food, movies, weather, news
+Extract ONLY items that appear in the messages above. Use these prefixes:
+- For topics (general subjects): NO PREFIX - just the topic word
+- For specific people mentioned BY NAME: person:ActualName
+- For dates/events WITH CONTEXT: date:EventDescription
+- For promises/commitments made: promise:ActionPromised  
+- For relationships described: relationship:TypeWithContext
 
-PEOPLE (prefix person:): 
-- Include names with titles: person:Dr. Smith, person:Mr. Johnson, person:Professor Brown
-- Include full names when available: person:John Smith, person:Mary Johnson
-- Include nicknames if mentioned: person:Mike, person:Sarah
+FORMAT RULES:
+1. Topics: Use 1-3 word phrases describing subjects discussed
+2. People: Use actual names from messages (person:NameFromMessage)
+3. Dates: Include event context (date:WhatEvent WhenDate)
+4. Promises: Specify what was promised (promise:SpecificAction)
+5. Relationships: Include who or where (relationship:TypeAndContext)
 
-DATES & EVENTS (prefix date:):
-- Holidays with context: date:Christmas dinner, date:Thanksgiving celebration, date:New Year party
-- Events with dates: date:Birthday party October 15th, date:Wedding anniversary July 3rd
-- Specific occasions: date:Summer vacation 2024, date:Graduation ceremony May
-DO NOT include just month names without context
+ABSOLUTELY DO NOT INCLUDE:
+- Category labels (PEOPLE, DATES, PROMISES, RELATIONSHIPS, TOPICS)
+- Section numbers (1., 2., 3.)
+- Generic placeholder examples (Dr. Smith, John Smith, Christmas dinner, etc.)
+- The word ""Examples"" or explanatory text
+- Anything not actually mentioned in the conversation above
 
-PROMISES (prefix promise:):
-- Specific commitments: promise:Call back tomorrow morning, promise:Send files by Friday
-- Action items: promise:Meet for coffee Saturday, promise:Bring documents to office
-DO NOT use vague promises
-
-RELATIONSHIPS (prefix relationship:):
-- With people names: relationship:Parent-child John and Mary, relationship:Siblings Sarah and Tom
-- With context: relationship:Coworkers at Tech Corp, relationship:Friends from college
-DO NOT use generic terms without names or context
-
-CRITICAL RULES:
-1. DO NOT include category labels like ""PEOPLE"", ""DATES & EVENTS"", ""PROMISES"", ""RELATIONSHIPS"", ""MAIN TOPICS""
-2. DO NOT include section numbers like ""1."", ""2."", ""3.""
-3. DO NOT include the word ""Examples"" or any explanatory text
-4. Each item must follow the exact format: prefix:description OR just description for topics
-5. Include full context (WHO, WHAT, WHEN) for people, dates, promises, relationships
-6. Separate items with commas only
-
-Return ONLY the extracted items in a comma-separated list with proper prefixes. Nothing else.";
+OUTPUT FORMAT:
+Return a comma-separated list with proper prefixes. Extract ONLY from the actual messages provided.
+ONLY return items that were genuinely discussed in this specific conversation.";
         }
         else
         {
             prompt = $@"{sb}
 
-Based on these messages, identify the main topics discussed.
-Return ONLY a comma-separated list of single-word or short-phrase topics (e.g., ""work, family, vacation, plans, hobbies, weekend, dinner, movies, sports, travel"").
-Include as many relevant topics as you can find.
-Do not include explanations, numbering, or extra formatting - just topics separated by commas.";
+Analyze the messages above and identify the main topics discussed in THIS specific conversation.
+
+Extract ONLY topics that are actually mentioned or discussed in these messages.
+Use 1-3 word phrases describing the subjects.
+
+DO NOT include:
+- Generic placeholder examples
+- Category labels or section headers
+- The word ""Examples""
+- Any explanatory text
+
+Return ONLY a comma-separated list of topics that were genuinely discussed in this conversation.";
         }
 
         try
