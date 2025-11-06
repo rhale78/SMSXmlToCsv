@@ -691,35 +691,40 @@ public class NetworkGraphGenerator
         {
             prompt = $@"{sb}
 
-Based on these messages, identify and categorize:
+Analyze these messages and extract the following, using the exact format shown:
 
-1. MAIN TOPICS - General conversation subjects (work, family, vacation, hobbies, sports, travel, health, food, movies)
+REGULAR TOPICS (no prefix): work, family, vacation, hobbies, sports, travel, health, food, movies, weather, news
 
-2. PEOPLE - Specific people mentioned by name (format: person:FirstName LastName or person:FirstName)
-   Examples: person:John Smith, person:Sarah, person:Dr. Brown
+PEOPLE (prefix person:): 
+- Include names with titles: person:Dr. Smith, person:Mr. Johnson, person:Professor Brown
+- Include full names when available: person:John Smith, person:Mary Johnson
+- Include nicknames if mentioned: person:Mike, person:Sarah
 
-3. DATES & EVENTS - Specific dates, holidays, or events with context (format: date:Event on Date or date:Holiday)
-   Examples: date:Birthday party October 15th, date:Thanksgiving dinner, date:Anniversary trip
-   AVOID: Just month names like ""October"" without context
+DATES & EVENTS (prefix date:):
+- Holidays with context: date:Christmas dinner, date:Thanksgiving celebration, date:New Year party
+- Events with dates: date:Birthday party October 15th, date:Wedding anniversary July 3rd
+- Specific occasions: date:Summer vacation 2024, date:Graduation ceremony May
+DO NOT include just month names without context
 
-4. PROMISES - Specific commitments or actions promised (format: promise:Action with context)
-   Examples: promise:Call back tomorrow, promise:Send documents by Friday, promise:Meet for coffee Saturday
-   AVOID: Vague promises like ""promise:call back""
+PROMISES (prefix promise:):
+- Specific commitments: promise:Call back tomorrow morning, promise:Send files by Friday
+- Action items: promise:Meet for coffee Saturday, promise:Bring documents to office
+DO NOT use vague promises
 
-5. RELATIONSHIPS - Relationship types with context (format: relationship:Type between people)
-   Examples: relationship:Parent-child John and Mary, relationship:Coworkers at office, relationship:Friends since college
-   AVOID: Just ""relationship:parent"" without saying who
+RELATIONSHIPS (prefix relationship:):
+- With people names: relationship:Parent-child John and Mary, relationship:Siblings Sarah and Tom
+- With context: relationship:Coworkers at Tech Corp, relationship:Friends from college
+DO NOT use generic terms without names or context
 
-IMPORTANT RULES:
-- For people, dates, promises, relationships: Include WHO, WHAT, WHEN context
-- For topics: Keep them general (1-3 words)
-- Dates should specify the occasion or event, not just month/day
-- Promises should specify what is being promised
-- Relationships should specify who is involved
-- Use prefixes: person:, date:, promise:, relationship:
-- Regular topics have NO prefix
+CRITICAL RULES:
+1. DO NOT include category labels like ""PEOPLE"", ""DATES & EVENTS"", ""PROMISES"", ""RELATIONSHIPS"", ""MAIN TOPICS""
+2. DO NOT include section numbers like ""1."", ""2."", ""3.""
+3. DO NOT include the word ""Examples"" or any explanatory text
+4. Each item must follow the exact format: prefix:description OR just description for topics
+5. Include full context (WHO, WHAT, WHEN) for people, dates, promises, relationships
+6. Separate items with commas only
 
-Return ONLY a comma-separated list. Do not include explanations, numbering, or extra formatting.";
+Return ONLY the extracted items in a comma-separated list with proper prefixes. Nothing else.";
         }
         else
         {
@@ -742,11 +747,12 @@ Do not include explanations, numbering, or extra formatting - just topics separa
                 return new List<string>();
             }
 
-            // Parse response
+            // Parse response and filter out category labels
             List<string> topics = response
                 .Split(new[] { ',', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
                 .Select(t => t.Trim().Trim('.', '-', '*', '•', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', ')', '(', '[', ']', '"', '\''))
                 .Where(t => !string.IsNullOrWhiteSpace(t) && t.Length > 2 && t.Length < 100)  // Increased length for entities with context
+                .Where(t => !IsCategoryLabel(t))  // Filter out category labels
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
@@ -1132,6 +1138,38 @@ Do not include explanations, numbering, or extra formatting - just topics separa
 
     /// <summary>
     /// Parse entity type from prefixed topic strings and return appropriate group type
+    /// </summary>
+    /// <summary>
+    /// Check if a string is a category label that should be filtered out
+    /// </summary>
+    private bool IsCategoryLabel(string text)
+    {
+        string upper = text.ToUpperInvariant();
+        
+        // Filter out common category labels that LLMs might return
+        return upper == "PEOPLE" || 
+               upper == "PERSON" ||
+               upper == "DATES" || 
+               upper == "DATES & EVENTS" ||
+               upper == "DATES AND EVENTS" ||
+               upper == "EVENTS" ||
+               upper == "PROMISES" || 
+               upper == "PROMISE" ||
+               upper == "RELATIONSHIPS" || 
+               upper == "RELATIONSHIP" ||
+               upper == "MAIN TOPICS" ||
+               upper == "MAIN TOPIC" ||
+               upper == "TOPICS" ||
+               upper == "TOPIC" ||
+               upper == "EXAMPLES" ||
+               upper == "EXAMPLE" ||
+               upper.StartsWith("BASED ON") ||
+               upper.StartsWith("HERE ARE") ||
+               upper.StartsWith("THE FOLLOWING");
+    }
+
+    /// <summary>
+    /// Parse entity type from prefixed topic and return group type and display name
     /// </summary>
     private (int groupType, string displayName) ParseEntityType(string topic)
     {
