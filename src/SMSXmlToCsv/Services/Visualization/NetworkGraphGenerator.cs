@@ -177,8 +177,9 @@ public class NetworkGraphGenerator
 
                     try
                     {
-                        // Extract topics using AI (legacy approach)
-                        List<string> contactTopics = await ExtractTopicsAsync(msgTexts, nodes[contactPhone].Name);
+                        // Extract topics using AI with batching support
+                        Action<string> statusCallback = (status) => ctx.Status(status);
+                        List<string> contactTopics = await ExtractTopicsAsync(msgTexts, nodes[contactPhone].Name, statusCallback);
 
                         if (contactTopics.Count > 0)
                         {
@@ -472,21 +473,96 @@ public class NetworkGraphGenerator
     }
 
     /// <summary>
-    /// Extract topics using AI (from legacy algorithm)
+    /// Extract topics using AI with batching for large message sets
     /// </summary>
-    private async Task<List<string>> ExtractTopicsAsync(List<string> messageTexts, string contactName)
+    private async Task<List<string>> ExtractTopicsAsync(List<string> messageTexts, string contactName, Action<string>? statusUpdate = null)
     {
         if (messageTexts.Count < MIN_TOPIC_MESSAGES)
         {
             return new List<string>();
         }
 
-        // Process ALL messages - no sampling limit
-        StringBuilder sb = new StringBuilder();
-        sb.AppendLine($"Messages from conversation with {contactName}:");
+        const int BATCH_SIZE = 75;  // Optimal batch size for Ollama
+
+        // For smaller message sets, process in one batch
+        if (messageTexts.Count <= 100)
+        {
+            return await ExtractTopicsBatchAsync(messageTexts, contactName, 1, 1);
+        }
+
+        // For larger sets, process in batches
+        List<string> allTopics = new List<string>();
+        Dictionary<string, int> topicFrequency = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         
-        // Include all messages for comprehensive topic extraction
-        foreach (string msg in messageTexts)
+        int totalBatches = (int)Math.Ceiling(messageTexts.Count / (double)BATCH_SIZE);
+        
+        Log.Information("Processing {MessageCount} messages for {ContactName} in {BatchCount} batches", 
+            messageTexts.Count, contactName, totalBatches);
+        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName}: Processing {messageTexts.Count} messages in {totalBatches} batches");
+
+        // Process batches concurrently with limited parallelism
+        var batches = new List<Task<List<string>>>();
+        for (int i = 0; i < totalBatches; i++)
+        {
+            int batchNumber = i + 1;
+            int skip = i * BATCH_SIZE;
+            int take = Math.Min(BATCH_SIZE, messageTexts.Count - skip);
+            List<string> batchMessages = messageTexts.Skip(skip).Take(take).ToList();
+
+            statusUpdate?.Invoke($"AI analyzing {contactName} (batch {batchNumber}/{totalBatches})");
+
+            // Process batches with some parallelism (up to 3 concurrent)
+            if (batches.Count >= 3)
+            {
+                await Task.WhenAny(batches);
+                batches.RemoveAll(t => t.IsCompleted);
+            }
+
+            batches.Add(ExtractTopicsBatchAsync(batchMessages, contactName, batchNumber, totalBatches));
+        }
+
+        // Wait for all remaining batches to complete
+        var batchResults = await Task.WhenAll(batches);
+
+        // Aggregate topics from all batches
+        foreach (var batchTopics in batchResults)
+        {
+            foreach (var topic in batchTopics)
+            {
+                if (topicFrequency.ContainsKey(topic))
+                {
+                    topicFrequency[topic]++;
+                }
+                else
+                {
+                    topicFrequency[topic] = 1;
+                    allTopics.Add(topic);
+                }
+            }
+        }
+
+        // Sort by frequency and take top 250
+        var sortedTopics = allTopics
+            .OrderByDescending(t => topicFrequency[t])
+            .Take(250)
+            .ToList();
+
+        Log.Information("{ContactName}: Aggregated {TopicCount} unique topics from {BatchCount} batches", 
+            contactName, sortedTopics.Count, totalBatches);
+        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName}: Final {sortedTopics.Count} topics after aggregation");
+
+        return sortedTopics;
+    }
+
+    /// <summary>
+    /// Extract topics from a single batch of messages
+    /// </summary>
+    private async Task<List<string>> ExtractTopicsBatchAsync(List<string> batchMessages, string contactName, int batchNumber, int totalBatches)
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.AppendLine($"Messages from conversation with {contactName} (batch {batchNumber}/{totalBatches}):");
+        
+        foreach (string msg in batchMessages)
         {
             sb.AppendLine($"- {msg}");
         }
@@ -494,8 +570,8 @@ public class NetworkGraphGenerator
         string prompt = $@"{sb}
 
 Based on these messages, identify the main topics discussed.
-Return ONLY a comma-separated list of up to 250 single-word or short-phrase topics (e.g., ""work, family, vacation, plans, hobbies, weekend, dinner, movies, sports, travel"").
-Include as many relevant topics as you can find, aiming for comprehensive coverage.
+Return ONLY a comma-separated list of single-word or short-phrase topics (e.g., ""work, family, vacation, plans, hobbies, weekend, dinner, movies, sports, travel"").
+Include as many relevant topics as you can find.
 Do not include explanations, numbering, or extra formatting - just topics separated by commas.";
 
         try
@@ -504,26 +580,30 @@ Do not include explanations, numbering, or extra formatting - just topics separa
 
             if (string.IsNullOrWhiteSpace(response))
             {
-                // Don't log here - we're inside Status context
-                // Just return empty list silently
+                Log.Debug("{ContactName} batch {BatchNum}/{TotalBatches}: Empty response", 
+                    contactName, batchNumber, totalBatches);
                 return new List<string>();
             }
 
-            // Parse response (legacy parsing logic)
+            // Parse response
             List<string> topics = response
                 .Split(new[] { ',', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
                 .Select(t => t.Trim().Trim('.', '-', '*', '•', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', ')', '(', '[', ']', '"', '\''))
                 .Where(t => !string.IsNullOrWhiteSpace(t) && t.Length > 2 && t.Length < 50)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Take(250)  // Limit to 250 topics per contact
                 .ToList();
+
+            Log.Debug("{ContactName} batch {BatchNum}/{TotalBatches}: Found {TopicCount} topics: {Topics}", 
+                contactName, batchNumber, totalBatches, topics.Count, string.Join(", ", topics.Take(10)));
+            System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName} batch {batchNumber}/{totalBatches}: {topics.Count} topics - {string.Join(", ", topics.Take(5))}...");
 
             return topics;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Don't log here - we're inside Status context
-            // Just return empty list silently and let caller handle it
+            Log.Error(ex, "{ContactName} batch {BatchNum}/{TotalBatches}: Error extracting topics", 
+                contactName, batchNumber, totalBatches);
+            System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName} batch {batchNumber}/{totalBatches}: ERROR - {ex.Message}");
             return new List<string>();
         }
     }
@@ -675,7 +755,7 @@ Do not include explanations, numbering, or extra formatting - just topics separa
         <h3>Message Network</h3>
         <p>Nodes: <span id=""nodeCount"">0</span></p>
         <p>Links: <span id=""linkCount"">0</span></p>
-        <p>Click nodes to see details</p>
+        <p>Click nodes to highlight connections</p>
     </div>
     <div id=""legend"">
         <h4>Legend</h4>
@@ -689,7 +769,10 @@ Do not include explanations, numbering, or extra formatting - just topics separa
         </div>
         <div class=""legend-item"">
             <div class=""legend-color"" style=""background-color: #FF9800;""></div>
-            <span>Topics</span>
+            <span>Topics (with message counts)</span>
+        </div>
+        <div style=""margin-top: 10px; font-size: 11px; color: #aaa;"">
+            Click any node to highlight its connections
         </div>
     </div>
     <div id=""controls"">
@@ -808,11 +891,7 @@ Do not include explanations, numbering, or extra formatting - just topics separa
                     return sourceId !== clickedNode.id && targetId !== clickedNode.id;
                 }});
                 
-                // Show info
-                const topicsText = clickedNode.topTopics && clickedNode.topTopics.length > 0 
-                    ? clickedNode.topTopics.join(', ') 
-                    : 'None';
-                alert(`${{clickedNode.name}}\\nMessages: ${{clickedNode.messageCount}}\\nConnections: ${{connectedLinks.length}}\\nTopics: ${{topicsText}}`);
+                // No popup - just highlight the connections
             }});
 
         // Add message count labels on topic nodes
