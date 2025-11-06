@@ -409,13 +409,16 @@ public class NetworkGraphGenerator
             string topic = kvp.Key;
             HashSet<string> contactsDiscussingTopic = kvp.Value;
 
+            // Parse entity type and name from prefixed topics
+            (int groupType, string displayName) = ParseEntityType(topic);
+
             string topicNodeIdStr = $"topic_{topicNodeId++}";
             nodes[topicNodeIdStr] = new GraphNode
             {
                 Id = topicNodeIdStr,
-                Name = topic,
+                Name = displayName,
                 MessageCount = globalTopicFrequency[topic],
-                Group = 2
+                Group = groupType
             };
 
             // Create links from contacts/user to topics
@@ -688,21 +691,35 @@ public class NetworkGraphGenerator
         {
             prompt = $@"{sb}
 
-Based on these messages, identify:
-1. Main topics discussed (e.g., work, family, vacation, hobbies, sports, travel)
-2. People mentioned by name (prefix with 'person:')
-3. Important dates or events (prefix with 'date:')
-4. Promises or commitments made (prefix with 'promise:')
-5. Relationships discussed (prefix with 'relationship:')
+Based on these messages, identify and categorize:
 
-Return ONLY a comma-separated list. Examples:
-- Topics: ""work, family, vacation""
-- People: ""person:John, person:Sarah""
-- Dates: ""date:birthday, date:anniversary""
-- Promises: ""promise:call back, promise:meet for coffee""
-- Relationships: ""relationship:friendship, relationship:colleague""
+1. MAIN TOPICS - General conversation subjects (work, family, vacation, hobbies, sports, travel, health, food, movies)
 
-Include as many relevant items as you can find. Do not include explanations, numbering, or extra formatting - just items separated by commas.";
+2. PEOPLE - Specific people mentioned by name (format: person:FirstName LastName or person:FirstName)
+   Examples: person:John Smith, person:Sarah, person:Dr. Brown
+
+3. DATES & EVENTS - Specific dates, holidays, or events with context (format: date:Event on Date or date:Holiday)
+   Examples: date:Birthday party October 15th, date:Thanksgiving dinner, date:Anniversary trip
+   AVOID: Just month names like ""October"" without context
+
+4. PROMISES - Specific commitments or actions promised (format: promise:Action with context)
+   Examples: promise:Call back tomorrow, promise:Send documents by Friday, promise:Meet for coffee Saturday
+   AVOID: Vague promises like ""promise:call back""
+
+5. RELATIONSHIPS - Relationship types with context (format: relationship:Type between people)
+   Examples: relationship:Parent-child John and Mary, relationship:Coworkers at office, relationship:Friends since college
+   AVOID: Just ""relationship:parent"" without saying who
+
+IMPORTANT RULES:
+- For people, dates, promises, relationships: Include WHO, WHAT, WHEN context
+- For topics: Keep them general (1-3 words)
+- Dates should specify the occasion or event, not just month/day
+- Promises should specify what is being promised
+- Relationships should specify who is involved
+- Use prefixes: person:, date:, promise:, relationship:
+- Regular topics have NO prefix
+
+Return ONLY a comma-separated list. Do not include explanations, numbering, or extra formatting.";
         }
         else
         {
@@ -729,7 +746,7 @@ Do not include explanations, numbering, or extra formatting - just topics separa
             List<string> topics = response
                 .Split(new[] { ',', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
                 .Select(t => t.Trim().Trim('.', '-', '*', '•', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', ')', '(', '[', ']', '"', '\''))
-                .Where(t => !string.IsNullOrWhiteSpace(t) && t.Length > 2 && t.Length < 50)
+                .Where(t => !string.IsNullOrWhiteSpace(t) && t.Length > 2 && t.Length < 100)  // Increased length for entities with context
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
@@ -1111,5 +1128,36 @@ Do not include explanations, numbering, or extra formatting - just topics separa
     </script>
 </body>
 </html>";
+    }
+
+    /// <summary>
+    /// Parse entity type from prefixed topic strings and return appropriate group type
+    /// </summary>
+    private (int groupType, string displayName) ParseEntityType(string topic)
+    {
+        if (topic.StartsWith("person:", StringComparison.OrdinalIgnoreCase))
+        {
+            return (3, topic.Substring(7).Trim());  // Group 3 = Person
+        }
+        else if (topic.StartsWith("date:", StringComparison.OrdinalIgnoreCase))
+        {
+            return (4, topic.Substring(5).Trim());  // Group 4 = Date/Event
+        }
+        else if (topic.StartsWith("promise:", StringComparison.OrdinalIgnoreCase))
+        {
+            return (5, topic.Substring(8).Trim());  // Group 5 = Promise
+        }
+        else if (topic.StartsWith("relationship:", StringComparison.OrdinalIgnoreCase))
+        {
+            return (3, topic.Substring(13).Trim());  // Group 3 = Person/Relationship
+        }
+        else if (topic.StartsWith("event:", StringComparison.OrdinalIgnoreCase))
+        {
+            return (4, topic.Substring(6).Trim());  // Group 4 = Date/Event
+        }
+        else
+        {
+            return (2, topic);  // Group 2 = Regular topic
+        }
     }
 }
