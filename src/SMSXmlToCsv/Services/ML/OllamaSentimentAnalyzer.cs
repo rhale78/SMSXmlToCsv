@@ -188,6 +188,56 @@ public class OllamaSentimentAnalyzer
     }
 
     /// <summary>
+    /// Pull (download) a model from Ollama
+    /// </summary>
+    public async Task<bool> PullModelAsync(string modelName)
+    {
+        try
+        {
+            Log.Information("Pulling Ollama model: {ModelName}", modelName);
+
+            object requestBody = new
+            {
+                name = modelName,
+                stream = false
+            };
+
+            string jsonRequest = JsonSerializer.Serialize(requestBody);
+            StringContent content = new StringContent(jsonRequest, Encoding.UTF8, "application/json");
+
+            // This can take a long time for large models
+            using HttpClient longTimeoutClient = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
+            HttpResponseMessage response = await longTimeoutClient.PostAsync($"{_baseUrl}/api/pull", content);
+
+            if (response.IsSuccessStatusCode)
+            {
+                Log.Information("Successfully pulled model: {ModelName}", modelName);
+                return true;
+            }
+            else
+            {
+                Log.Warning("Failed to pull model {ModelName}: {StatusCode}", modelName, response.StatusCode);
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Error pulling model {ModelName}", modelName);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Check if a specific model is available
+    /// </summary>
+    public async Task<bool> IsModelAvailableAsync(string modelName)
+    {
+        List<string> availableModels = await GetAvailableModelsAsync();
+        return availableModels.Any(m => m.Equals(modelName, StringComparison.OrdinalIgnoreCase) || 
+                                        m.StartsWith(modelName.Split(':')[0], StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
     /// Analyze sentiment of a message with extended categories
     /// </summary>
     public async Task<SentimentResult> AnalyzeSentimentAsync(string text)
