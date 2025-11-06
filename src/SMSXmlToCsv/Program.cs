@@ -798,6 +798,7 @@ public class Program
         bool includeBothSides = AnsiConsole.Confirm("Include topics from YOUR sent messages? (may create busier graph)", defaultValue: false);
         bool includeUserLinks = AnsiConsole.Confirm("Show links from YOU node to topics?", defaultValue: !includeBothSides);
         bool extractEntities = AnsiConsole.Confirm("Extract named entities (people, dates, events)?", defaultValue: true);
+        bool skipUnknownContacts = AnsiConsole.Confirm("Skip contacts with 'Unknown' name?", defaultValue: true);
         
         // Create generator options
         var options = new Services.Visualization.NetworkGraphOptions
@@ -805,7 +806,8 @@ public class Program
             IncludeBothSides = includeBothSides,
             IncludeUserLinks = includeUserLinks,
             ExtractNamedEntities = extractEntities,
-            ImprovedSpacing = true
+            ImprovedSpacing = true,
+            SkipUnknownContacts = skipUnknownContacts
         };
 
         // Create generator with analyzer and options

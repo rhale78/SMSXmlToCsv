@@ -36,6 +36,11 @@ public class NetworkGraphOptions
     /// Use improved node spacing for better visualization
     /// </summary>
     public bool ImprovedSpacing { get; set; } = true;
+    
+    /// <summary>
+    /// Skip contacts with "Unknown" as contact name
+    /// </summary>
+    public bool SkipUnknownContacts { get; set; } = true;
 }
 
 /// <summary>
@@ -126,6 +131,12 @@ public class NetworkGraphGenerator
             if (string.IsNullOrEmpty(contactPhone) || contactPhone == "Unknown")
             {
                 continue; // Skip invalid contacts
+            }
+
+            // Skip contacts with "Unknown" name if option is enabled
+            if (_options.SkipUnknownContacts && contactName.Equals("Unknown", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
             }
 
             if (!nodes.ContainsKey(contactPhone))
@@ -494,6 +505,12 @@ public class NetworkGraphGenerator
                 continue;
             }
 
+            // Skip contacts with "Unknown" name if option is enabled
+            if (_options.SkipUnknownContacts && contactName.Equals("Unknown", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
             string contactKey = $"{contactName}_{contactPhone}";
             
             if (!messagesByContact.ContainsKey(contactKey))
@@ -751,6 +768,7 @@ Do not include explanations, numbering, or extra formatting - just topics separa
             List<string> topics = response
                 .Split(new[] { ',', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
                 .Select(t => t.Trim().Trim('.', '-', '*', '•', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', ')', '(', '[', ']', '"', '\''))
+                .Select(t => StripCategoryPrefix(t))  // Remove category prefixes like "dates & events: "
                 .Where(t => !string.IsNullOrWhiteSpace(t) && t.Length > 2 && t.Length < 100)  // Increased length for entities with context
                 .Where(t => !IsCategoryLabel(t))  // Filter out category labels
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -1077,10 +1095,10 @@ Do not include explanations, numbering, or extra formatting - just topics separa
                 // No popup - just highlight the connections
             }});
 
-        // Add message count labels on topic nodes
+        // Add message count labels on all nodes except contact and user nodes
         const nodeCount = g.append('g')
             .selectAll('text')
-            .data(data.nodes.filter(d => d.group === 2))
+            .data(data.nodes.filter(d => d.group !== 0 && d.group !== 1))  // Show counts on topics, people, dates, promises
             .join('text')
             .attr('class', 'node-count')
             .text(d => d.messageCount)
@@ -1139,6 +1157,45 @@ Do not include explanations, numbering, or extra formatting - just topics separa
     /// <summary>
     /// Check if a string is a category label that should be filtered out
     /// </summary>
+    /// <summary>
+    /// Strip category prefixes that LLMs sometimes add (e.g., "dates & events: date: Christmas")
+    /// </summary>
+    private string StripCategoryPrefix(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return text;
+
+        // Common patterns: "category: prefix: value" or "Category: prefix: value"
+        // We want to strip "category: " part but keep "prefix: value"
+        
+        // Check for patterns like "dates & events: date:" or "people: person:"
+        string[] categoryPrefixes = new[]
+        {
+            "dates & events:",
+            "dates and events:",
+            "people:",
+            "persons:",
+            "promises:",
+            "relationships:",
+            "main topics:",
+            "topics:",
+            "events:"
+        };
+
+        string lowerText = text.ToLowerInvariant();
+        foreach (string prefix in categoryPrefixes)
+        {
+            if (lowerText.StartsWith(prefix))
+            {
+                // Strip the category prefix, trim, and return the rest
+                text = text.Substring(prefix.Length).Trim();
+                break;
+            }
+        }
+
+        return text;
+    }
+
     private bool IsCategoryLabel(string text)
     {
         string upper = text.ToUpperInvariant();
