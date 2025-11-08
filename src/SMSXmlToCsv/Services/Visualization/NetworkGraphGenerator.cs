@@ -804,7 +804,10 @@ EXAMPLE JSON FORMAT (structure only - DO NOT copy content):
   {{""name"": ""EventFromConversation on DateFromConversation"", ""type"": ""date"", ""context"": ""celebration""}}
 ]
 
-Return ONLY the JSON array. Extract ONLY items from this specific conversation.";
+Return ONLY a single valid JSON array (starting with [ and ending with ]). 
+Do NOT return multiple arrays.
+Do NOT include any explanatory text before or after the JSON.
+Extract ONLY items from this specific conversation.";
         }
         else
         {
@@ -836,7 +839,10 @@ EXAMPLE JSON FORMAT (structure only):
   {{""name"": ""family"", ""type"": ""topic""}}
 ]
 
-Return ONLY the JSON array with actual conversation topics.";
+Return ONLY a single valid JSON array (starting with [ and ending with ]).
+Do NOT return multiple arrays.
+Do NOT include any explanatory text before or after the JSON.
+Extract ONLY actual conversation topics.";
         }
 
         try
@@ -875,24 +881,41 @@ Return ONLY the JSON array with actual conversation topics.";
     {
         try
         {
-            // Clean up response - extract JSON array if wrapped in markdown or other text
+            // Clean up response - handle multiple JSON arrays returned by AI
             string cleanJson = jsonResponse.Trim();
-            int jsonStart = cleanJson.IndexOf('[');
-            int jsonEnd = cleanJson.LastIndexOf(']');
             
-            if (jsonStart >= 0 && jsonEnd > jsonStart)
+            // Check if there are multiple separate JSON arrays (e.g., "[...] [...] [...]")
+            // This happens when AI returns multiple arrays instead of one
+            var allTopicItems = new List<TopicItem>();
+            
+            int currentPos = 0;
+            while (currentPos < cleanJson.Length)
             {
-                cleanJson = cleanJson.Substring(jsonStart, jsonEnd - jsonStart + 1);
+                int jsonStart = cleanJson.IndexOf('[', currentPos);
+                if (jsonStart < 0) break;
+                
+                int jsonEnd = FindMatchingBracket(cleanJson, jsonStart);
+                if (jsonEnd < 0) break;
+                
+                string singleArray = cleanJson.Substring(jsonStart, jsonEnd - jsonStart + 1);
+                
+                // Parse this array
+                var options = new JsonSerializerOptions 
+                { 
+                    PropertyNameCaseInsensitive = true,
+                    AllowTrailingCommas = true
+                };
+                
+                var items = JsonSerializer.Deserialize<List<TopicItem>>(singleArray, options);
+                if (items != null && items.Count > 0)
+                {
+                    allTopicItems.AddRange(items);
+                }
+                
+                currentPos = jsonEnd + 1;
             }
 
-            // Parse JSON
-            var options = new JsonSerializerOptions 
-            { 
-                PropertyNameCaseInsensitive = true,
-                AllowTrailingCommas = true
-            };
-            
-            var topicItems = JsonSerializer.Deserialize<List<TopicItem>>(cleanJson, options);
+            var topicItems = allTopicItems;
 
             if (topicItems == null || topicItems.Count == 0)
             {
@@ -927,6 +950,27 @@ Return ONLY the JSON array with actual conversation topics.";
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
         }
+    }
+
+    /// <summary>
+    /// Find the matching closing bracket for an opening bracket
+    /// </summary>
+    private int FindMatchingBracket(string text, int openPos)
+    {
+        if (openPos < 0 || openPos >= text.Length || text[openPos] != '[')
+            return -1;
+        
+        int depth = 0;
+        for (int i = openPos; i < text.Length; i++)
+        {
+            if (text[i] == '[') depth++;
+            else if (text[i] == ']')
+            {
+                depth--;
+                if (depth == 0) return i;
+            }
+        }
+        return -1;
     }
 
     /// <summary>
