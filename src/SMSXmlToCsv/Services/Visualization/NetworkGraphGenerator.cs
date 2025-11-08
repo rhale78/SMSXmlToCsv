@@ -44,6 +44,18 @@ public class NetworkGraphOptions
 }
 
 /// <summary>
+/// Topic item extracted from AI with structured format
+/// </summary>
+public class TopicItem
+{
+    public string Name { get; set; } = string.Empty;
+    public string Type { get; set; } = "topic";  // "topic", "person", "date", "event", "promise", "relationship"
+    public List<TopicItem>? SubTopics { get; set; }  // Hierarchical subtopics
+    public int MessageCount { get; set; }  // Number of messages mentioning this topic
+    public string? Context { get; set; }  // Additional context (e.g., for dates: "Birthday celebration")
+}
+
+/// <summary>
 /// Graph node for network visualization
 /// </summary>
 public class GraphNode
@@ -54,6 +66,7 @@ public class GraphNode
     public int Group { get; set; }  // 0 = user, 1 = contact, 2 = topic, 3 = person mentioned, 4 = date/event, 5 = promise
     public List<string> TopTopics { get; set; } = new List<string>();
     public string? EntityType { get; set; }  // For named entities: "person", "date", "event", "promise", "relationship"
+    public string? ParentTopic { get; set; }  // For subtopics, reference to parent topic ID
 }
 
 /// <summary>
@@ -742,7 +755,7 @@ public class NetworkGraphGenerator
     }
 
     /// <summary>
-    /// Extract topics from a single batch of messages
+    /// Extract topics from a single batch of messages using JSON format
     /// </summary>
     private async Task<List<string>> ExtractTopicsBatchAsync(List<string> batchMessages, string contactName, int batchNumber, int totalBatches, bool extractEntities = false)
     {
@@ -761,30 +774,37 @@ public class NetworkGraphGenerator
 
 Analyze these messages and identify what was actually discussed in THIS conversation.
 
-Extract ONLY items that appear in the messages above. Use these prefixes:
-- For topics (general subjects): NO PREFIX - just the topic word
-- For specific people mentioned BY NAME: person:ActualName
-- For dates/events WITH CONTEXT: date:EventDescription
-- For promises/commitments made: promise:ActionPromised  
-- For relationships described: relationship:TypeWithContext
+Return a JSON array of topic objects. Each object must have these fields:
+- ""name"": The actual topic/person/date/event/promise from the conversation
+- ""type"": One of: ""topic"", ""person"", ""date"", ""event"", ""promise"", ""relationship""
+- ""subTopics"": Optional array of subtopic objects (same structure, can be nested)
+- ""context"": Optional additional context
 
-FORMAT RULES:
-1. Topics: Use 1-3 word phrases describing subjects discussed
-2. People: Use actual names from messages (person:NameFromMessage)
-3. Dates: Include event context (date:WhatEvent WhenDate)
-4. Promises: Specify what was promised (promise:SpecificAction)
-5. Relationships: Include who or where (relationship:TypeAndContext)
+EXTRACTION RULES:
+1. Topics: General subjects discussed (type: ""topic"")
+2. People: Actual names mentioned BY NAME (type: ""person"")
+3. Dates/Events: Specific dates or events WITH CONTEXT (type: ""date"" or ""event"")
+4. Promises: Commitments actually made (type: ""promise"")
+5. Relationships: Relationship types described (type: ""relationship"")
+6. SubTopics: Related subtopics under main topics (nest them using ""subTopics"" array)
 
-ABSOLUTELY DO NOT INCLUDE:
-- Category labels (PEOPLE, DATES, PROMISES, RELATIONSHIPS, TOPICS)
-- Section numbers (1., 2., 3.)
-- Generic placeholder examples (Dr. Smith, John Smith, Christmas dinner, etc.)
-- The word ""Examples"" or explanatory text
-- Anything not actually mentioned in the conversation above
+CRITICAL:
+- Extract ONLY from the messages above
+- DO NOT include generic placeholder examples
+- DO NOT include category labels or section headers
+- Use actual names, dates, and content from the conversation
 
-OUTPUT FORMAT:
-Return a comma-separated list with proper prefixes. Extract ONLY from the actual messages provided.
-ONLY return items that were genuinely discussed in this specific conversation.";
+EXAMPLE JSON FORMAT (structure only - DO NOT copy content):
+[
+  {{""name"": ""work"", ""type"": ""topic"", ""subTopics"": [
+    {{""name"": ""project deadline"", ""type"": ""topic""}},
+    {{""name"": ""team meeting"", ""type"": ""topic""}}
+  ]}},
+  {{""name"": ""PersonNameFromConversation"", ""type"": ""person""}},
+  {{""name"": ""EventFromConversation on DateFromConversation"", ""type"": ""date"", ""context"": ""celebration""}}
+]
+
+Return ONLY the JSON array. Extract ONLY items from this specific conversation.";
         }
         else
         {
@@ -792,16 +812,31 @@ ONLY return items that were genuinely discussed in this specific conversation.";
 
 Analyze the messages above and identify the main topics discussed in THIS specific conversation.
 
-Extract ONLY topics that are actually mentioned or discussed in these messages.
-Use 1-3 word phrases describing the subjects.
+Return a JSON array of topic objects. Each object must have:
+- ""name"": The actual topic from the conversation
+- ""type"": ""topic""
+- ""subTopics"": Optional array of subtopic objects (same structure, can be nested)
 
-DO NOT include:
-- Generic placeholder examples
-- Category labels or section headers
-- The word ""Examples""
-- Any explanatory text
+EXTRACTION RULES:
+1. Use 1-3 word phrases for topic names
+2. Group related topics using subTopics for hierarchy
+3. Extract ONLY topics actually discussed in these messages
 
-Return ONLY a comma-separated list of topics that were genuinely discussed in this conversation.";
+CRITICAL:
+- DO NOT include generic placeholder examples
+- DO NOT include explanatory text
+- Extract ONLY from the conversation above
+
+EXAMPLE JSON FORMAT (structure only):
+[
+  {{""name"": ""work"", ""type"": ""topic"", ""subTopics"": [
+    {{""name"": ""deadlines"", ""type"": ""topic""}},
+    {{""name"": ""meetings"", ""type"": ""topic""}}
+  ]}},
+  {{""name"": ""family"", ""type"": ""topic""}}
+]
+
+Return ONLY the JSON array with actual conversation topics.";
         }
 
         try
@@ -815,15 +850,8 @@ Return ONLY a comma-separated list of topics that were genuinely discussed in th
                 return new List<string>();
             }
 
-            // Parse response and filter out category labels
-            List<string> topics = response
-                .Split(new[] { ',', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(t => t.Trim().Trim('.', '-', '*', '•', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', ')', '(', '[', ']', '"', '\''))
-                .Select(t => StripCategoryPrefix(t))  // Remove category prefixes like "dates & events: "
-                .Where(t => !string.IsNullOrWhiteSpace(t) && t.Length > 2 && t.Length < 100)  // Increased length for entities with context
-                .Where(t => !IsCategoryLabel(t))  // Filter out category labels
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            // Parse JSON response
+            List<string> topics = ParseJsonTopics(response, contactName, batchNumber, totalBatches);
 
             Log.Debug("{ContactName} batch {BatchNum}/{TotalBatches}: Found {TopicCount} topics: {Topics}", 
                 contactName, batchNumber, totalBatches, topics.Count, string.Join(", ", topics.Take(10)));
@@ -837,6 +865,120 @@ Return ONLY a comma-separated list of topics that were genuinely discussed in th
                 contactName, batchNumber, totalBatches);
             System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName} batch {batchNumber}/{totalBatches}: ERROR - {ex.Message}");
             return new List<string>();
+        }
+    }
+
+    /// <summary>
+    /// Parse JSON response and flatten topics with proper prefixes and subtopic notation
+    /// </summary>
+    private List<string> ParseJsonTopics(string jsonResponse, string contactName, int batchNumber, int totalBatches)
+    {
+        try
+        {
+            // Clean up response - extract JSON array if wrapped in markdown or other text
+            string cleanJson = jsonResponse.Trim();
+            int jsonStart = cleanJson.IndexOf('[');
+            int jsonEnd = cleanJson.LastIndexOf(']');
+            
+            if (jsonStart >= 0 && jsonEnd > jsonStart)
+            {
+                cleanJson = cleanJson.Substring(jsonStart, jsonEnd - jsonStart + 1);
+            }
+
+            // Parse JSON
+            var options = new JsonSerializerOptions 
+            { 
+                PropertyNameCaseInsensitive = true,
+                AllowTrailingCommas = true
+            };
+            
+            var topicItems = JsonSerializer.Deserialize<List<TopicItem>>(cleanJson, options);
+
+            if (topicItems == null || topicItems.Count == 0)
+            {
+                Log.Warning("{ContactName} batch {BatchNum}/{TotalBatches}: Failed to parse JSON or empty array", 
+                    contactName, batchNumber, totalBatches);
+                System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName} batch {batchNumber}/{totalBatches}: JSON parse returned empty");
+                return new List<string>();
+            }
+
+            // Flatten topics with prefixes and subtopic notation
+            List<string> flatTopics = new List<string>();
+            FlattenTopics(topicItems, flatTopics, null);
+
+            return flatTopics
+                .Where(t => !string.IsNullOrWhiteSpace(t) && t.Length > 2 && t.Length < 150)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        catch (JsonException ex)
+        {
+            Log.Warning(ex, "{ContactName} batch {BatchNum}/{TotalBatches}: JSON parse error, falling back to text parsing", 
+                contactName, batchNumber, totalBatches);
+            System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName} batch {batchNumber}/{totalBatches}: JSON parse error - {ex.Message}");
+            
+            // Fallback to simple comma-separated parsing
+            return jsonResponse
+                .Split(new[] { ',', '\n', '\r', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(t => t.Trim().Trim('.', '-', '*', '•', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', ')', '(', '[', ']', '{', '}', '"', '\'', ':', '/'))
+                .Select(t => StripCategoryPrefix(t))
+                .Where(t => !string.IsNullOrWhiteSpace(t) && t.Length > 2 && t.Length < 100)
+                .Where(t => !IsCategoryLabel(t))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+    }
+
+    /// <summary>
+    /// Recursively flatten topics and subtopics with proper naming
+    /// </summary>
+    private void FlattenTopics(List<TopicItem> items, List<string> output, string? parentPrefix)
+    {
+        foreach (var item in items)
+        {
+            if (string.IsNullOrWhiteSpace(item.Name))
+                continue;
+
+            // Build the topic string with appropriate prefix
+            string topicString;
+            string cleanName = item.Name.Trim();
+
+            // Add type prefix for non-topic types
+            switch (item.Type?.ToLower())
+            {
+                case "person":
+                    topicString = $"person:{cleanName}";
+                    break;
+                case "date":
+                case "event":
+                    topicString = $"date:{cleanName}";
+                    break;
+                case "promise":
+                    topicString = $"promise:{cleanName}";
+                    break;
+                case "relationship":
+                    topicString = $"relationship:{cleanName}";
+                    break;
+                default:
+                    // For subtopics, indicate parent relationship
+                    if (!string.IsNullOrEmpty(parentPrefix))
+                    {
+                        topicString = $"{cleanName} ({parentPrefix})";  // e.g., "deadlines (work)"
+                    }
+                    else
+                    {
+                        topicString = cleanName;
+                    }
+                    break;
+            }
+
+            output.Add(topicString);
+
+            // Recursively process subtopics
+            if (item.SubTopics != null && item.SubTopics.Count > 0)
+            {
+                FlattenTopics(item.SubTopics, output, cleanName);
+            }
         }
     }
 
