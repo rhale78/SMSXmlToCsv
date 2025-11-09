@@ -11,10 +11,14 @@ namespace SMSXmlToCsv.Importers;
 
 /// <summary>
 /// Imports messages from Google Takeout archives.
-/// Supports Google Hangouts (JSON) and Google Voice (HTML).
+/// Supports Google Hangouts (JSON), Google Chat Groups (JSON), and Google Voice (HTML).
 /// </summary>
 public class GoogleTakeoutImporter : IDataImporter
 {
+    // Threshold to determine if timestamp is in milliseconds vs seconds
+    // Timestamps greater than this value (year 2286 in seconds) are assumed to be milliseconds
+    private const long MILLISECONDS_THRESHOLD = 10_000_000_000L;
+
     public string SourceName => "Google Takeout";
 
     public bool CanImport(string sourcePath)
@@ -22,6 +26,30 @@ public class GoogleTakeoutImporter : IDataImporter
         if (!Directory.Exists(sourcePath))
         {
             return false;
+        }
+
+        // Check for new Google Chat Groups structure
+        string[] googleChatGroupsPaths = new[]
+        {
+            Path.Combine(sourcePath, "Google Chat", "Groups"),
+            Path.Combine(sourcePath, "google chat", "groups"),
+            Path.Combine(sourcePath, "Google Chat", "groups"),
+            Path.Combine(sourcePath, "google chat", "Groups")
+        };
+
+        foreach (string path in googleChatGroupsPaths)
+        {
+            if (Directory.Exists(path))
+            {
+                // Check if any subdirectory contains messages.json
+                foreach (string subdir in Directory.GetDirectories(path))
+                {
+                    if (File.Exists(Path.Combine(subdir, "messages.json")))
+                    {
+                        return true;
+                    }
+                }
+            }
         }
 
         // Check for Hangouts.json (case-insensitive)
@@ -80,7 +108,11 @@ public class GoogleTakeoutImporter : IDataImporter
     {
         List<Message> messages = new List<Message>();
 
-        // Try to import Hangouts
+        // Try to import Google Chat Groups (new format)
+        IEnumerable<Message> googleChatMessages = await ImportGoogleChatGroupsAsync(sourcePath);
+        messages.AddRange(googleChatMessages);
+
+        // Try to import Hangouts (legacy format)
         IEnumerable<Message> hangoutsMessages = await ImportHangoutsAsync(sourcePath);
         messages.AddRange(hangoutsMessages);
 
@@ -89,6 +121,280 @@ public class GoogleTakeoutImporter : IDataImporter
         messages.AddRange(voiceMessages);
 
         return messages;
+    }
+
+    private async Task<IEnumerable<Message>> ImportGoogleChatGroupsAsync(string sourcePath)
+    {
+        List<Message> messages = new List<Message>();
+
+        // Look for Google Chat Groups directory
+        string[] possibleGroupsPaths = new[]
+        {
+            Path.Combine(sourcePath, "Google Chat", "Groups"),
+            Path.Combine(sourcePath, "google chat", "groups"),
+            Path.Combine(sourcePath, "Google Chat", "groups"),
+            Path.Combine(sourcePath, "google chat", "Groups")
+        };
+
+        string? groupsPath = null;
+        foreach (string path in possibleGroupsPaths)
+        {
+            if (Directory.Exists(path))
+            {
+                groupsPath = path;
+                break;
+            }
+        }
+
+        if (groupsPath == null)
+        {
+            return messages; // No Google Chat Groups data
+        }
+
+        // Get all subdirectories (each is a conversation/group)
+        string[] groupDirectories = Directory.GetDirectories(groupsPath);
+        int totalGroups = 0;
+        int processedGroups = 0;
+
+        // Count groups with messages.json first for display
+        foreach (string groupDir in groupDirectories)
+        {
+            if (File.Exists(Path.Combine(groupDir, "messages.json")))
+            {
+                totalGroups++;
+            }
+        }
+
+        if (totalGroups == 0)
+        {
+            return messages; // No valid groups found
+        }
+
+        // Show count instead of enumerating
+        Serilog.Log.Information("Found {GroupCount} Google Chat group(s) to import", totalGroups);
+
+        foreach (string groupDir in groupDirectories)
+        {
+            string messagesPath = Path.Combine(groupDir, "messages.json");
+            string groupInfoPath = Path.Combine(groupDir, "group_info.json");
+
+            if (!File.Exists(messagesPath))
+            {
+                continue; // Skip if no messages.json
+            }
+
+            try
+            {
+                // Parse group_info.json to get recipients
+                Dictionary<string, string> participants = new Dictionary<string, string>();
+                if (File.Exists(groupInfoPath))
+                {
+                    participants = await ParseGroupInfoAsync(groupInfoPath);
+                }
+
+                // Parse messages.json
+                IEnumerable<Message> groupMessages = await ParseGoogleChatMessagesAsync(messagesPath, participants);
+                messages.AddRange(groupMessages);
+                processedGroups++;
+
+                Serilog.Log.Debug("Imported {MessageCount} messages from group: {GroupName}", 
+                    groupMessages.Count(), Path.GetFileName(groupDir));
+            }
+            catch (Exception ex)
+            {
+                Serilog.Log.Warning(ex, "Failed to import Google Chat group: {GroupDir}", Path.GetFileName(groupDir));
+            }
+        }
+
+        Serilog.Log.Information("Successfully imported {ProcessedCount} of {TotalCount} Google Chat group(s)", 
+            processedGroups, totalGroups);
+
+        return messages;
+    }
+
+    private async Task<Dictionary<string, string>> ParseGroupInfoAsync(string groupInfoPath)
+    {
+        Dictionary<string, string> participants = new Dictionary<string, string>();
+
+        try
+        {
+            string jsonContent = await File.ReadAllTextAsync(groupInfoPath);
+            using JsonDocument doc = JsonDocument.Parse(jsonContent);
+            JsonElement root = doc.RootElement;
+
+            // Parse members/participants from group_info.json
+            // The exact structure may vary, so we handle common patterns
+            if (root.TryGetProperty("members", out JsonElement members))
+            {
+                foreach (JsonElement member in members.EnumerateArray())
+                {
+                    string id = string.Empty;
+                    string name = "Unknown";
+
+                    if (member.TryGetProperty("id", out JsonElement idElement))
+                    {
+                        id = idElement.GetString() ?? string.Empty;
+                    }
+
+                    if (member.TryGetProperty("name", out JsonElement nameElement))
+                    {
+                        name = nameElement.GetString() ?? "Unknown";
+                    }
+                    else if (member.TryGetProperty("display_name", out JsonElement displayNameElement))
+                    {
+                        name = displayNameElement.GetString() ?? "Unknown";
+                    }
+
+                    if (!string.IsNullOrEmpty(id))
+                    {
+                        participants[id] = name;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Serilog.Log.Debug(ex, "Failed to parse group_info.json: {Path}", groupInfoPath);
+        }
+
+        return participants;
+    }
+
+    private async Task<IEnumerable<Message>> ParseGoogleChatMessagesAsync(string messagesPath, Dictionary<string, string> participants)
+    {
+        List<Message> messages = new List<Message>();
+
+        try
+        {
+            string jsonContent = await File.ReadAllTextAsync(messagesPath);
+            using JsonDocument doc = JsonDocument.Parse(jsonContent);
+            JsonElement root = doc.RootElement;
+
+            // messages.json contains an array of messages
+            if (root.ValueKind == JsonValueKind.Array)
+            {
+                foreach (JsonElement messageElement in root.EnumerateArray())
+                {
+                    Message? message = ParseGoogleChatMessage(messageElement, participants);
+                    if (message != null)
+                    {
+                        messages.Add(message);
+                    }
+                }
+            }
+            else if (root.TryGetProperty("messages", out JsonElement messagesArray))
+            {
+                foreach (JsonElement messageElement in messagesArray.EnumerateArray())
+                {
+                    Message? message = ParseGoogleChatMessage(messageElement, participants);
+                    if (message != null)
+                    {
+                        messages.Add(message);
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Serilog.Log.Warning(ex, "Failed to parse messages.json: {Path}", messagesPath);
+        }
+
+        return messages;
+    }
+
+    private Message? ParseGoogleChatMessage(JsonElement messageElement, Dictionary<string, string> participants)
+    {
+        try
+        {
+            // Get creator (sender) information
+            string creatorId = string.Empty;
+            string creatorName = "Unknown";
+
+            if (messageElement.TryGetProperty("creator", out JsonElement creator))
+            {
+                if (creator.TryGetProperty("user_id", out JsonElement userIdElement))
+                {
+                    creatorId = userIdElement.GetString() ?? string.Empty;
+                }
+                else if (creator.TryGetProperty("id", out JsonElement idElement))
+                {
+                    creatorId = idElement.GetString() ?? string.Empty;
+                }
+
+                if (creator.TryGetProperty("name", out JsonElement nameElement))
+                {
+                    creatorName = nameElement.GetString() ?? "Unknown";
+                }
+                else if (creator.TryGetProperty("display_name", out JsonElement displayNameElement))
+                {
+                    creatorName = displayNameElement.GetString() ?? "Unknown";
+                }
+            }
+
+            // If creator name is still Unknown, try to look it up in participants
+            if (creatorName == "Unknown" && !string.IsNullOrEmpty(creatorId) && participants.ContainsKey(creatorId))
+            {
+                creatorName = participants[creatorId];
+            }
+
+            // Get timestamp - handle both seconds and milliseconds
+            long timestampValue = 0;
+            if (messageElement.TryGetProperty("created_date", out JsonElement timestampElement))
+            {
+                string? timestampStr = timestampElement.GetString();
+                if (!string.IsNullOrEmpty(timestampStr) && long.TryParse(timestampStr, out long ts))
+                {
+                    timestampValue = ts;
+                }
+            }
+            else if (messageElement.TryGetProperty("timestamp", out JsonElement timestampElement2))
+            {
+                string? timestampStr = timestampElement2.GetString();
+                if (!string.IsNullOrEmpty(timestampStr) && long.TryParse(timestampStr, out long ts))
+                {
+                    timestampValue = ts;
+                }
+            }
+
+            // Convert timestamp using helper method
+            DateTimeOffset timestamp = ParseTimestamp(timestampValue);
+
+            // Get message text
+            string messageText = string.Empty;
+            if (messageElement.TryGetProperty("text", out JsonElement textElement))
+            {
+                messageText = textElement.GetString() ?? string.Empty;
+            }
+            else if (messageElement.TryGetProperty("content", out JsonElement contentElement))
+            {
+                messageText = contentElement.GetString() ?? string.Empty;
+            }
+
+            if (string.IsNullOrWhiteSpace(messageText))
+            {
+                return null; // Skip empty messages
+            }
+
+            // For Google Chat groups, sender is the creator, recipients are other participants
+            Contact sender = Contact.FromName(creatorName);
+            
+            // Create a generic recipient representing the group
+            // We could list all participants, but that would be complex for the recipient field
+            Contact recipient = Contact.FromName("Google Chat Group");
+
+            return Message.CreateTextMessage(
+                "Google Chat",
+                sender,
+                recipient,
+                timestamp,
+                messageText,
+                MessageDirection.Unknown); // Direction is unknown in group chats
+        }
+        catch (Exception ex)
+        {
+            Serilog.Log.Debug(ex, "Failed to parse individual Google Chat message");
+            return null;
+        }
     }
 
     private async Task<IEnumerable<Message>> ImportHangoutsAsync(string sourcePath)
@@ -366,6 +672,26 @@ public class GoogleTakeoutImporter : IDataImporter
         catch (Exception)
         {
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Helper method to parse timestamp value and convert to DateTimeOffset.
+    /// Automatically handles both millisecond and second precision timestamps.
+    /// </summary>
+    /// <param name="timestampValue">Timestamp value (either seconds or milliseconds since Unix epoch)</param>
+    /// <returns>DateTimeOffset representing the timestamp</returns>
+    private static DateTimeOffset ParseTimestamp(long timestampValue)
+    {
+        // Check if timestamp is in milliseconds or seconds
+        // If value is greater than MILLISECONDS_THRESHOLD (year 2286 in seconds), it's probably milliseconds
+        if (timestampValue > MILLISECONDS_THRESHOLD)
+        {
+            return DateTimeOffset.FromUnixTimeMilliseconds(timestampValue);
+        }
+        else
+        {
+            return DateTimeOffset.FromUnixTimeSeconds(timestampValue);
         }
     }
 }

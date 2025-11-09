@@ -713,21 +713,14 @@ public class Program
 
     private static void PerformSentimentAnalysis()
     {
-        string model = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title("Select Ollama model:")
-                .AddChoices(Services.ML.OllamaSentimentAnalyzer.RecommendedModels));
+        string? model = SelectOllamaModelAsync("sentiment analysis").Result;
+        
+        if (model == null)
+        {
+            return; // User cancelled or Ollama not available
+        }
 
         Services.ML.OllamaSentimentAnalyzer analyzer = new Services.ML.OllamaSentimentAnalyzer(model);
-
-        if (!analyzer.IsAvailableAsync().Result)
-        {
-            AnsiConsole.MarkupLine("[red]Ollama is not available. Please ensure Ollama is running.[/]");
-            AnsiConsole.MarkupLine("[yellow]Install from: https://ollama.ai[/]");
-            AnsiConsole.WriteLine("Press any key to continue...");
-            Console.ReadKey();
-            return;
-        }
 
         int maxMessages = AnsiConsole.Ask("How many messages to analyze? (warning: can be slow)", 10);
         Dictionary<Services.ML.ExtendedSentiment, int> sentimentCounts = new Dictionary<Services.ML.ExtendedSentiment, int>();
@@ -787,43 +780,50 @@ public class Program
 
     private static void GenerateNetworkGraph(bool perContact)
     {
-        // First, select Ollama model
-        string model = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title("Select Ollama model for AI topic extraction:")
-                .AddChoices(Services.ML.OllamaSentimentAnalyzer.RecommendedModels));
+        // Smart model selection
+        string? model = SelectOllamaModelAsync("AI topic extraction").Result;
+        
+        if (model == null)
+        {
+            return; // User cancelled or Ollama not available
+        }
 
         Services.ML.OllamaSentimentAnalyzer analyzer = new Services.ML.OllamaSentimentAnalyzer(model);
-
-        // Check if Ollama is available
-        if (!analyzer.IsAvailableAsync().Result)
-        {
-            AnsiConsole.MarkupLine("[red]Ollama is not available. Please ensure Ollama is running.[/]");
-            AnsiConsole.MarkupLine("[yellow]Install from: https://ollama.ai[/]");
-            AnsiConsole.MarkupLine($"[yellow]Then run: ollama pull {model}[/]");
-            AnsiConsole.WriteLine("Press any key to continue...");
-            Console.ReadKey();
-            return;
-        }
 
         AnsiConsole.MarkupLine($"[cyan]✓ Using AI ({model}) for topic extraction[/]");
         AnsiConsole.MarkupLine($"[dim]Topics will be extracted using AI analysis of conversation content.[/]");
         AnsiConsole.WriteLine();
 
-        // Create generator with just the analyzer (constructor takes only analyzer now)
+        // Ask for network graph options
+        bool includeBothSides = AnsiConsole.Confirm("Include topics from YOUR sent messages? (may create busier graph)", defaultValue: false);
+        bool includeUserLinks = AnsiConsole.Confirm("Show links from YOU node to topics?", defaultValue: !includeBothSides);
+        bool extractEntities = AnsiConsole.Confirm("Extract named entities (people, dates, events)?", defaultValue: true);
+        bool skipUnknownContacts = AnsiConsole.Confirm("Skip contacts with 'Unknown' name?", defaultValue: true);
+        
+        // Create generator options
+        var options = new Services.Visualization.NetworkGraphOptions
+        {
+            IncludeBothSides = includeBothSides,
+            IncludeUserLinks = includeUserLinks,
+            ExtractNamedEntities = extractEntities,
+            ImprovedSpacing = true,
+            SkipUnknownContacts = skipUnknownContacts
+        };
+
+        // Create generator with analyzer and options
         Services.Visualization.NetworkGraphGenerator generator = 
-            new Services.Visualization.NetworkGraphGenerator(analyzer);
+            new Services.Visualization.NetworkGraphGenerator(analyzer, options);
 
         try
         {
             if (perContact)
             {
-                AnsiConsole.MarkupLine("[yellow]Per-contact network graphs not yet implemented in new version[/]");
-                AnsiConsole.MarkupLine("[dim]Use 'Network Graph (All Contacts)' option instead[/]");
+                string outputDirectory = AnsiConsole.Ask("Output directory for per-contact graphs:", "./output/per-contact");
+                
+                string userName = AnsiConsole.Ask("Your name:", "You");
 
-                AnsiConsole.WriteLine("Press any key to continue...");
-                Console.ReadKey();
-                return;
+                // Generate per-contact graphs
+                generator.GeneratePerContactGraphsAsync(_importedMessages, outputDirectory, userName).Wait();
             }
             else
             {
@@ -831,11 +831,8 @@ public class Program
                 
                 string userName = AnsiConsole.Ask("Your name:", "You");
 
-                AnsiConsole.Status()
-                    .Start("Generating network graph with AI...", ctx =>
-                    {
-                        generator.GenerateGraphAsync(_importedMessages, outputPath, userName).Wait();
-                    });
+                // Don't wrap in Status here - GenerateGraphAsync has its own Status display
+                generator.GenerateGraphAsync(_importedMessages, outputPath, userName).Wait();
             }
 
             AnsiConsole.MarkupLine($"[green]✓ Network graph generated successfully![/]");
@@ -944,6 +941,125 @@ public class Program
         else
         {
             return $"{timeSpan.TotalDays:F1} days";
+        }
+    }
+
+    /// <summary>
+    /// Smart model selection for Ollama - checks available models and offers to download if needed
+    /// </summary>
+    private static async Task<string?> SelectOllamaModelAsync(string purpose = "AI processing")
+    {
+        // Create a temporary analyzer to check availability
+        Services.ML.OllamaSentimentAnalyzer tempAnalyzer = new Services.ML.OllamaSentimentAnalyzer();
+
+        // Check if Ollama is running
+        if (!await tempAnalyzer.IsAvailableAsync())
+        {
+            AnsiConsole.MarkupLine("[red]✗ Ollama is not running or not available.[/]");
+            AnsiConsole.MarkupLine("[yellow]Please ensure Ollama is installed and running.[/]");
+            AnsiConsole.MarkupLine("[yellow]Install from: https://ollama.ai[/]");
+            AnsiConsole.WriteLine();
+            AnsiConsole.WriteLine("Press any key to continue...");
+            Console.ReadKey();
+            return null;
+        }
+
+        // Get available models
+        List<string> availableModels = await tempAnalyzer.GetAvailableModelsAsync();
+
+        if (availableModels.Count > 0)
+        {
+            // Filter to show recommended models that are available, plus any others
+            List<string> recommendedAvailable = Services.ML.OllamaSentimentAnalyzer.RecommendedModels
+                .Where(rec => availableModels.Any(avail => 
+                    avail.Equals(rec, StringComparison.OrdinalIgnoreCase) || 
+                    avail.StartsWith(rec.Split(':')[0], StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+
+            // Add other available models that aren't in the recommended list
+            List<string> otherModels = availableModels
+                .Where(avail => !recommendedAvailable.Any(rec => 
+                    avail.StartsWith(rec.Split(':')[0], StringComparison.OrdinalIgnoreCase)))
+                .Take(5) // Limit to avoid overwhelming the user
+                .ToList();
+
+            List<string> modelChoices = new List<string>();
+            modelChoices.AddRange(recommendedAvailable);
+            modelChoices.AddRange(otherModels);
+            modelChoices.Add("Download a new model...");
+
+            AnsiConsole.MarkupLine($"[green]✓ Found {availableModels.Count} downloaded model(s)[/]");
+            string selectedModel = AnsiConsole.Prompt(
+                new SelectionPrompt<string>()
+                    .Title($"Select Ollama model for {purpose}:")
+                    .AddChoices(modelChoices));
+
+            if (selectedModel == "Download a new model...")
+            {
+                return await DownloadNewModelAsync();
+            }
+
+            return selectedModel;
+        }
+        else
+        {
+            // No models available, offer to download one
+            AnsiConsole.MarkupLine("[yellow]! No Ollama models are currently downloaded.[/]");
+            
+            if (AnsiConsole.Confirm("Would you like to download a recommended model?"))
+            {
+                return await DownloadNewModelAsync();
+            }
+            else
+            {
+                AnsiConsole.MarkupLine("[yellow]Cannot proceed without a model.[/]");
+                AnsiConsole.WriteLine("Press any key to continue...");
+                Console.ReadKey();
+                return null;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Download a new Ollama model
+    /// </summary>
+    private static async Task<string?> DownloadNewModelAsync()
+    {
+        string selectedModel = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("Select a model to download:")
+                .AddChoices(Services.ML.OllamaSentimentAnalyzer.RecommendedModels)
+                .AddChoices(new[] { "Cancel" }));
+
+        if (selectedModel == "Cancel")
+        {
+            return null;
+        }
+
+        AnsiConsole.MarkupLine($"[cyan]Downloading model: {selectedModel}[/]");
+        AnsiConsole.MarkupLine("[dim]This may take several minutes depending on the model size and your internet connection...[/]");
+
+        Services.ML.OllamaSentimentAnalyzer analyzer = new Services.ML.OllamaSentimentAnalyzer(selectedModel);
+        
+        bool success = false;
+        await AnsiConsole.Status()
+            .StartAsync($"Downloading {selectedModel}...", async ctx =>
+            {
+                success = await analyzer.PullModelAsync(selectedModel);
+            });
+
+        if (success)
+        {
+            AnsiConsole.MarkupLine($"[green]✓ Successfully downloaded {selectedModel}[/]");
+            return selectedModel;
+        }
+        else
+        {
+            AnsiConsole.MarkupLine($"[red]✗ Failed to download {selectedModel}[/]");
+            AnsiConsole.MarkupLine("[yellow]Please check your internet connection and try again.[/]");
+            AnsiConsole.WriteLine("Press any key to continue...");
+            Console.ReadKey();
+            return null;
         }
     }
 }
