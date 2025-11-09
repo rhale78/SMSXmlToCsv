@@ -63,7 +63,7 @@ public class OllamaSentimentAnalyzer
     {
         _model = model;
         _baseUrl = baseUrl;
-        _httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
+        _httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
     }
 
     /// <summary>

@@ -49,7 +49,7 @@ public class NetworkGraphOptions
 public class TopicItem
 {
     public string Name { get; set; } = string.Empty;
-    public string Type { get; set; } = "topic";  // "topic", "person", "date", "event", "promise", "relationship"
+    public string Type { get; set; } = "topic";  // "topic", "person", "company", "place", "date", "event", "promise", "relationship"
     public List<TopicItem>? SubTopics { get; set; }  // Hierarchical subtopics
     public int MessageCount { get; set; }  // Number of messages mentioning this topic
     public string? Context { get; set; }  // Additional context (e.g., for dates: "Birthday celebration")
@@ -63,9 +63,9 @@ public class GraphNode
     public string Id { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public int MessageCount { get; set; }
-    public int Group { get; set; }  // 0 = user, 1 = contact, 2 = topic, 3 = person mentioned, 4 = date/event, 5 = promise
+    public int Group { get; set; }  // 0 = user, 1 = contact, 2 = topic, 3 = person mentioned, 4 = date/event, 5 = promise, 6 = company, 7 = place
     public List<string> TopTopics { get; set; } = new List<string>();
-    public string? EntityType { get; set; }  // For named entities: "person", "date", "event", "promise", "relationship"
+    public string? EntityType { get; set; }  // For named entities: "person", "company", "place", "date", "event", "promise", "relationship"
     public string? ParentTopic { get; set; }  // For subtopics, reference to parent topic ID
 }
 
@@ -150,8 +150,9 @@ public class NetworkGraphGenerator
                 continue; // Skip invalid contacts
             }
 
-            // Skip contacts with "Unknown" name if option is enabled
-            if (_options.SkipUnknownContacts && contactName.Equals("Unknown", StringComparison.OrdinalIgnoreCase))
+            // Skip contacts with "Unknown" or "(Unknown)" name if option is enabled
+            if (_options.SkipUnknownContacts && (contactName.Equals("Unknown", StringComparison.OrdinalIgnoreCase) || 
+                                                 contactName.Equals("(Unknown)", StringComparison.OrdinalIgnoreCase)))
             {
                 System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Skipping unknown contact: {contactPhone}");
                 continue;
@@ -272,7 +273,7 @@ public class NetworkGraphGenerator
         int processed = 0;
         int totalContacts = contactMessages.Count;
         List<(string ContactName, int TopicCount)> topicResults = new List<(string, int)>();
-        List<(string ContactName, string TopicsPreview)> topicDetails = new List<(string, string)>();
+        List<(string ContactName, List<string> AllTopics)> allContactTopics = new List<(string, List<string>)>();
         List<string> emptyResponseContacts = new List<string>();
         List<(string ContactName, string Error)> errorContacts = new List<(string, string)>();
 
@@ -309,13 +310,8 @@ public class NetworkGraphGenerator
                             // Store for logging later (outside Status context)
                             topicResults.Add((nodes[contactPhone].Name, contactTopics.Count));
                             
-                            // Store topics summary for detailed logging
-                            string topicsPreview = string.Join(", ", contactTopics.Take(5));
-                            if (contactTopics.Count > 5)
-                            {
-                                topicsPreview += $" (and {contactTopics.Count - 5} more)";
-                            }
-                            topicDetails.Add((nodes[contactPhone].Name, topicsPreview));
+                            // Store ALL topics for detailed logging
+                            allContactTopics.Add((nodes[contactPhone].Name, contactTopics.ToList()));
 
                             nodes[contactPhone].TopTopics = UNLIMITED_TOPICS_MODE
                                 ? contactTopics.ToList()
@@ -323,27 +319,25 @@ public class NetworkGraphGenerator
 
                             foreach (string topic in contactTopics)
                             {
-                                // Count messages containing this topic
-                                int topicMessageCount = msgTexts.Count(m => m.IndexOf(topic, StringComparison.OrdinalIgnoreCase) >= 0);
+                                // Extract message count from topic string (format: "name:count" or "prefix:name:count")
+                                int topicMessageCount = ExtractMessageCount(topic, msgTexts);
 
-                                if (topicMessageCount == 0)
+                                // Get clean topic name without count suffix
+                                string cleanTopic = RemoveMessageCount(topic);
+
+                                if (!topicToContacts.ContainsKey(cleanTopic))
                                 {
-                                    topicMessageCount = Math.Max(1, msgTexts.Count / Math.Max(contactTopics.Count, 1));
+                                    topicToContacts[cleanTopic] = new HashSet<string>();
+                                    globalTopicFrequency[cleanTopic] = 0;
                                 }
 
-                                if (!topicToContacts.ContainsKey(topic))
+                                topicToContacts[cleanTopic].Add(contactPhone);
+                                if (!contactTopicMessageCounts[contactPhone].ContainsKey(cleanTopic))
                                 {
-                                    topicToContacts[topic] = new HashSet<string>();
-                                    globalTopicFrequency[topic] = 0;
+                                    contactTopicMessageCounts[contactPhone][cleanTopic] = 0;
                                 }
-
-                                topicToContacts[topic].Add(contactPhone);
-                                if (!contactTopicMessageCounts[contactPhone].ContainsKey(topic))
-                                {
-                                    contactTopicMessageCounts[contactPhone][topic] = 0;
-                                }
-                                contactTopicMessageCounts[contactPhone][topic] += topicMessageCount;
-                                globalTopicFrequency[topic] += topicMessageCount;
+                                contactTopicMessageCounts[contactPhone][cleanTopic] += topicMessageCount;
+                                globalTopicFrequency[cleanTopic] += topicMessageCount;
                             }
                         }
                         else
@@ -383,26 +377,25 @@ public class NetworkGraphGenerator
                             {
                                 foreach (string topic in userTopics)
                                 {
-                                    int topicMessageCount = msgTexts.Count(m => m.IndexOf(topic, StringComparison.OrdinalIgnoreCase) >= 0);
+                                    // Extract message count from topic string
+                                    int topicMessageCount = ExtractMessageCount(topic, msgTexts);
 
-                                    if (topicMessageCount == 0)
+                                    // Get clean topic name without count suffix
+                                    string cleanTopic = RemoveMessageCount(topic);
+
+                                    if (!topicToContacts.ContainsKey(cleanTopic))
                                     {
-                                        topicMessageCount = Math.Max(1, msgTexts.Count / Math.Max(userTopics.Count, 1));
+                                        topicToContacts[cleanTopic] = new HashSet<string>();
+                                        globalTopicFrequency[cleanTopic] = 0;
                                     }
 
-                                    if (!topicToContacts.ContainsKey(topic))
+                                    topicToContacts[cleanTopic].Add("user");
+                                    if (!userTopicMessageCounts.ContainsKey(cleanTopic))
                                     {
-                                        topicToContacts[topic] = new HashSet<string>();
-                                        globalTopicFrequency[topic] = 0;
+                                        userTopicMessageCounts[cleanTopic] = 0;
                                     }
-
-                                    topicToContacts[topic].Add("user");
-                                    if (!userTopicMessageCounts.ContainsKey(topic))
-                                    {
-                                        userTopicMessageCounts[topic] = 0;
-                                    }
-                                    userTopicMessageCounts[topic] += topicMessageCount;
-                                    globalTopicFrequency[topic] += topicMessageCount;
+                                    userTopicMessageCounts[cleanTopic] += topicMessageCount;
+                                    globalTopicFrequency[cleanTopic] += topicMessageCount;
                                 }
                             }
                         }
@@ -429,11 +422,12 @@ public class NetworkGraphGenerator
             System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Contact '{contactName}': Found {topicCount} topics");
         }
         
-        // Log detailed topics for debugging
-        foreach ((string contactName, string topicsPreview) in topicDetails)
+        // Log ALL topics for each contact (not just a preview)
+        foreach ((string contactName, List<string> topics) in allContactTopics)
         {
-            Log.Debug("Topics for {ContactName}: {Topics}", contactName, topicsPreview);
-            System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Topics for '{contactName}': {topicsPreview}");
+            string allTopicsStr = string.Join(", ", topics);
+            Log.Information("All topics for {ContactName}: {Topics}", contactName, allTopicsStr);
+            System.Diagnostics.Debug.WriteLine($"[NET GRAPH] All topics for '{contactName}': {allTopicsStr}");
         }
 
         // Log warnings for empty responses
@@ -569,8 +563,9 @@ public class NetworkGraphGenerator
                 continue;
             }
 
-            // Skip contacts with "Unknown" name if option is enabled
-            if (_options.SkipUnknownContacts && contactName.Equals("Unknown", StringComparison.OrdinalIgnoreCase))
+            // Skip contacts with "Unknown" or "(Unknown)" name if option is enabled
+            if (_options.SkipUnknownContacts && (contactName.Equals("Unknown", StringComparison.OrdinalIgnoreCase) ||
+                                                 contactName.Equals("(Unknown)", StringComparison.OrdinalIgnoreCase)))
             {
                 continue;
             }
@@ -775,38 +770,45 @@ public class NetworkGraphGenerator
 Analyze these messages and identify what was actually discussed in THIS conversation.
 
 Return a JSON array of topic objects. Each object must have these fields:
-- ""name"": The actual topic/person/date/event/promise from the conversation
-- ""type"": One of: ""topic"", ""person"", ""date"", ""event"", ""promise"", ""relationship""
+- ""name"": The actual topic/person/date/event/promise/company/place from the conversation
+- ""type"": One of: ""topic"", ""person"", ""company"", ""place"", ""date"", ""event"", ""promise"", ""relationship""
 - ""subTopics"": Optional array of subtopic objects (same structure, can be nested)
+- ""messageCount"": Number of messages that mention this topic (estimate based on frequency)
 - ""context"": Optional additional context
 
 EXTRACTION RULES:
 1. Topics: General subjects discussed (type: ""topic"")
-2. People: Actual names mentioned BY NAME (type: ""person"")
-3. Dates/Events: Specific dates or events WITH CONTEXT (type: ""date"" or ""event"")
-4. Promises: Commitments actually made (type: ""promise"")
-5. Relationships: Relationship types described (type: ""relationship"")
-6. SubTopics: Related subtopics under main topics (nest them using ""subTopics"" array)
+2. People: Actual names mentioned BY NAME in the messages (type: ""person"")
+3. Companies: Business names, organizations, employers (type: ""company"")
+4. Places: Locations, restaurants, cities, venues actually mentioned (type: ""place"")
+5. Dates/Events: Specific dates or events WITH CONTEXT (type: ""date"" or ""event"")
+6. Promises: Commitments actually made (type: ""promise"")
+7. Relationships: Relationship types described (type: ""relationship"")
+8. SubTopics: Related subtopics under main topics (nest them using ""subTopics"" array)
 
-CRITICAL:
+CRITICAL INSTRUCTIONS:
 - Extract ONLY from the messages above
 - DO NOT include generic placeholder examples
 - DO NOT include category labels or section headers
-- Use actual names, dates, and content from the conversation
+- Use actual names, dates, companies, and content from the conversation
+- For each topic, estimate messageCount based on how often it appears
+- Return a SINGLE valid JSON array starting with [ and ending with ]
+- Ensure all brackets and braces are properly matched
+- DO NOT return multiple separate arrays
 
 EXAMPLE JSON FORMAT (structure only - DO NOT copy content):
 [
-  {{""name"": ""work"", ""type"": ""topic"", ""subTopics"": [
-    {{""name"": ""project deadline"", ""type"": ""topic""}},
-    {{""name"": ""team meeting"", ""type"": ""topic""}}
+  {{""name"": ""work"", ""type"": ""topic"", ""messageCount"": 15, ""subTopics"": [
+    {{""name"": ""project deadline"", ""type"": ""topic"", ""messageCount"": 8}},
+    {{""name"": ""team meeting"", ""type"": ""topic"", ""messageCount"": 5}}
   ]}},
-  {{""name"": ""PersonNameFromConversation"", ""type"": ""person""}},
-  {{""name"": ""EventFromConversation on DateFromConversation"", ""type"": ""date"", ""context"": ""celebration""}}
+  {{""name"": ""PersonNameFromConversation"", ""type"": ""person"", ""messageCount"": 12}},
+  {{""name"": ""CompanyFromConversation"", ""type"": ""company"", ""messageCount"": 7}},
+  {{""name"": ""RestaurantFromConversation"", ""type"": ""place"", ""messageCount"": 4}},
+  {{""name"": ""EventFromConversation on DateFromConversation"", ""type"": ""date"", ""messageCount"": 3, ""context"": ""celebration""}}
 ]
 
-Return ONLY a single valid JSON array (starting with [ and ending with ]). 
-Do NOT return multiple arrays.
-Do NOT include any explanatory text before or after the JSON.
+Return ONLY a single valid JSON array. Verify brackets match before responding.
 Extract ONLY items from this specific conversation.";
         }
         else
@@ -819,29 +821,32 @@ Return a JSON array of topic objects. Each object must have:
 - ""name"": The actual topic from the conversation
 - ""type"": ""topic""
 - ""subTopics"": Optional array of subtopic objects (same structure, can be nested)
+- ""messageCount"": Number of messages that mention this topic (estimate)
 
 EXTRACTION RULES:
 1. Use 1-3 word phrases for topic names
 2. Group related topics using subTopics for hierarchy
 3. Extract ONLY topics actually discussed in these messages
+4. Estimate messageCount for each topic based on how often it appears
 
-CRITICAL:
+CRITICAL INSTRUCTIONS:
 - DO NOT include generic placeholder examples
 - DO NOT include explanatory text
 - Extract ONLY from the conversation above
+- Return a SINGLE valid JSON array starting with [ and ending with ]
+- Ensure all brackets and braces are properly matched
+- DO NOT return multiple separate arrays
 
 EXAMPLE JSON FORMAT (structure only):
 [
-  {{""name"": ""work"", ""type"": ""topic"", ""subTopics"": [
-    {{""name"": ""deadlines"", ""type"": ""topic""}},
-    {{""name"": ""meetings"", ""type"": ""topic""}}
+  {{""name"": ""work"", ""type"": ""topic"", ""messageCount"": 20, ""subTopics"": [
+    {{""name"": ""deadlines"", ""type"": ""topic"", ""messageCount"": 12}},
+    {{""name"": ""meetings"", ""type"": ""topic"", ""messageCount"": 8}}
   ]}},
-  {{""name"": ""family"", ""type"": ""topic""}}
+  {{""name"": ""family"", ""type"": ""topic"", ""messageCount"": 15}}
 ]
 
-Return ONLY a single valid JSON array (starting with [ and ending with ]).
-Do NOT return multiple arrays.
-Do NOT include any explanatory text before or after the JSON.
+Return ONLY a single valid JSON array. Verify brackets match before responding.
 Extract ONLY actual conversation topics.";
         }
 
@@ -876,6 +881,7 @@ Extract ONLY actual conversation topics.";
 
     /// <summary>
     /// Parse JSON response and flatten topics with proper prefixes and subtopic notation
+    /// Enhanced with better error handling for malformed JSON
     /// </summary>
     private List<string> ParseJsonTopics(string jsonResponse, string contactName, int batchNumber, int totalBatches)
     {
@@ -889,27 +895,72 @@ Extract ONLY actual conversation topics.";
             var allTopicItems = new List<TopicItem>();
             
             int currentPos = 0;
+            int arrayCount = 0;
+            
             while (currentPos < cleanJson.Length)
             {
                 int jsonStart = cleanJson.IndexOf('[', currentPos);
                 if (jsonStart < 0) break;
                 
                 int jsonEnd = FindMatchingBracket(cleanJson, jsonStart);
-                if (jsonEnd < 0) break;
+                if (jsonEnd < 0) 
+                {
+                    Log.Warning("{ContactName} batch {BatchNum}/{TotalBatches}: Unmatched bracket at position {Pos}", 
+                        contactName, batchNumber, totalBatches, jsonStart);
+                    break;
+                }
                 
                 string singleArray = cleanJson.Substring(jsonStart, jsonEnd - jsonStart + 1);
+                arrayCount++;
                 
                 // Parse this array
-                var options = new JsonSerializerOptions 
-                { 
-                    PropertyNameCaseInsensitive = true,
-                    AllowTrailingCommas = true
-                };
-                
-                var items = JsonSerializer.Deserialize<List<TopicItem>>(singleArray, options);
-                if (items != null && items.Count > 0)
+                try
                 {
-                    allTopicItems.AddRange(items);
+                    var options = new JsonSerializerOptions 
+                    { 
+                        PropertyNameCaseInsensitive = true,
+                        AllowTrailingCommas = true,
+                        ReadCommentHandling = JsonCommentHandling.Skip
+                    };
+                    
+                    var items = JsonSerializer.Deserialize<List<TopicItem>>(singleArray, options);
+                    if (items != null && items.Count > 0)
+                    {
+                        allTopicItems.AddRange(items);
+                        Log.Debug("{ContactName} batch {BatchNum}/{TotalBatches}: Parsed array {ArrayNum} with {ItemCount} items", 
+                            contactName, batchNumber, totalBatches, arrayCount, items.Count);
+                    }
+                }
+                catch (JsonException jsonEx)
+                {
+                    Log.Warning(jsonEx, "{ContactName} batch {BatchNum}/{TotalBatches}: Failed to parse array {ArrayNum}, trying to fix", 
+                        contactName, batchNumber, totalBatches, arrayCount);
+                    
+                    // Try to fix common JSON issues
+                    string fixedArray = TryFixCommonJsonIssues(singleArray);
+                    
+                    try
+                    {
+                        var options = new JsonSerializerOptions 
+                        { 
+                            PropertyNameCaseInsensitive = true,
+                            AllowTrailingCommas = true,
+                            ReadCommentHandling = JsonCommentHandling.Skip
+                        };
+                        
+                        var items = JsonSerializer.Deserialize<List<TopicItem>>(fixedArray, options);
+                        if (items != null && items.Count > 0)
+                        {
+                            allTopicItems.AddRange(items);
+                            Log.Information("{ContactName} batch {BatchNum}/{TotalBatches}: Successfully fixed and parsed array {ArrayNum}", 
+                                contactName, batchNumber, totalBatches, arrayCount);
+                        }
+                    }
+                    catch (JsonException)
+                    {
+                        Log.Warning("{ContactName} batch {BatchNum}/{TotalBatches}: Could not fix array {ArrayNum}, skipping", 
+                            contactName, batchNumber, totalBatches, arrayCount);
+                    }
                 }
                 
                 currentPos = jsonEnd + 1;
@@ -919,11 +970,14 @@ Extract ONLY actual conversation topics.";
 
             if (topicItems == null || topicItems.Count == 0)
             {
-                Log.Warning("{ContactName} batch {BatchNum}/{TotalBatches}: Failed to parse JSON or empty array", 
-                    contactName, batchNumber, totalBatches);
-                System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName} batch {batchNumber}/{totalBatches}: JSON parse returned empty");
+                Log.Warning("{ContactName} batch {BatchNum}/{TotalBatches}: Failed to parse JSON or empty array (found {ArrayCount} arrays)", 
+                    contactName, batchNumber, totalBatches, arrayCount);
+                System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName} batch {batchNumber}/{totalBatches}: JSON parse returned empty (found {arrayCount} arrays)");
                 return new List<string>();
             }
+
+            Log.Information("{ContactName} batch {BatchNum}/{TotalBatches}: Successfully parsed {ArrayCount} JSON arrays with {ItemCount} total items", 
+                contactName, batchNumber, totalBatches, arrayCount, topicItems.Count);
 
             // Flatten topics with prefixes and subtopic notation
             List<string> flatTopics = new List<string>();
@@ -953,6 +1007,38 @@ Extract ONLY actual conversation topics.";
     }
 
     /// <summary>
+    /// Try to fix common JSON issues like mismatched brackets, trailing commas, etc.
+    /// </summary>
+    private string TryFixCommonJsonIssues(string json)
+    {
+        // Remove any trailing commas before closing brackets
+        json = System.Text.RegularExpressions.Regex.Replace(json, @",\s*}", "}");
+        json = System.Text.RegularExpressions.Regex.Replace(json, @",\s*]", "]");
+        
+        // Try to balance brackets
+        int openBraces = json.Count(c => c == '{');
+        int closeBraces = json.Count(c => c == '}');
+        int openBrackets = json.Count(c => c == '[');
+        int closeBrackets = json.Count(c => c == ']');
+        
+        // Add missing closing braces
+        while (openBraces > closeBraces)
+        {
+            json += "}";
+            closeBraces++;
+        }
+        
+        // Add missing closing brackets
+        while (openBrackets > closeBrackets)
+        {
+            json += "]";
+            closeBrackets++;
+        }
+        
+        return json;
+    }
+
+    /// <summary>
     /// Find the matching closing bracket for an opening bracket
     /// </summary>
     private int FindMatchingBracket(string text, int openPos)
@@ -974,7 +1060,7 @@ Extract ONLY actual conversation topics.";
     }
 
     /// <summary>
-    /// Recursively flatten topics and subtopics with proper naming
+    /// Recursively flatten topics and subtopics with proper naming and message counts
     /// </summary>
     private void FlattenTopics(List<TopicItem> items, List<string> output, string? parentPrefix)
     {
@@ -987,31 +1073,37 @@ Extract ONLY actual conversation topics.";
             string topicString;
             string cleanName = item.Name.Trim();
 
-            // Add type prefix for non-topic types
+            // Add type prefix for non-topic types and include message count
             switch (item.Type?.ToLower())
             {
                 case "person":
-                    topicString = $"person:{cleanName}";
+                    topicString = $"person:{cleanName}:{item.MessageCount}";
+                    break;
+                case "company":
+                    topicString = $"company:{cleanName}:{item.MessageCount}";
+                    break;
+                case "place":
+                    topicString = $"place:{cleanName}:{item.MessageCount}";
                     break;
                 case "date":
                 case "event":
-                    topicString = $"date:{cleanName}";
+                    topicString = $"date:{cleanName}:{item.MessageCount}";
                     break;
                 case "promise":
-                    topicString = $"promise:{cleanName}";
+                    topicString = $"promise:{cleanName}:{item.MessageCount}";
                     break;
                 case "relationship":
-                    topicString = $"relationship:{cleanName}";
+                    topicString = $"relationship:{cleanName}:{item.MessageCount}";
                     break;
                 default:
                     // For subtopics, indicate parent relationship
                     if (!string.IsNullOrEmpty(parentPrefix))
                     {
-                        topicString = $"{cleanName} ({parentPrefix})";  // e.g., "deadlines (work)"
+                        topicString = $"{cleanName} ({parentPrefix}):{item.MessageCount}";  // e.g., "deadlines (work):5"
                     }
                     else
                     {
-                        topicString = cleanName;
+                        topicString = $"{cleanName}:{item.MessageCount}";
                     }
                     break;
             }
@@ -1201,6 +1293,14 @@ Extract ONLY actual conversation topics.";
             <div class=""legend-color"" style=""background-color: #00BCD4;""></div>
             <span>Promises</span>
         </div>
+        <div class=""legend-item"">
+            <div class=""legend-color"" style=""background-color: #FF5722;""></div>
+            <span>Companies</span>
+        </div>
+        <div class=""legend-item"">
+            <div class=""legend-color"" style=""background-color: #8BC34A;""></div>
+            <span>Places</span>
+        </div>
         <div style=""margin-top: 10px; font-size: 11px; color: #aaa;"">
             Click any node to highlight its connections
         </div>
@@ -1285,6 +1385,8 @@ Extract ONLY actual conversation topics.";
                 if (d.group === 3) return '#F44336';  // Person mentioned - red
                 if (d.group === 4) return '#9C27B0';  // Date/event - purple
                 if (d.group === 5) return '#00BCD4';  // Promise - cyan
+                if (d.group === 6) return '#FF5722';  // Company - deep orange
+                if (d.group === 7) return '#8BC34A';  // Place - light green
                 return '#999999';  // Unknown - gray
             }})
             .call(d3.drag()
@@ -1392,6 +1494,59 @@ Extract ONLY actual conversation topics.";
     }
 
     /// <summary>
+    /// Extract message count from topic string (format: "name:count" or "prefix:name:count")
+    /// </summary>
+    private int ExtractMessageCount(string topic, List<string> msgTexts)
+    {
+        // Try to extract count from the end of the topic string
+        int lastColonIndex = topic.LastIndexOf(':');
+        if (lastColonIndex > 0 && lastColonIndex < topic.Length - 1)
+        {
+            string potentialCount = topic.Substring(lastColonIndex + 1);
+            if (int.TryParse(potentialCount, out int count) && count > 0)
+            {
+                return count;
+            }
+        }
+
+        // Fallback: count occurrences in messages
+        string topicName = RemoveMessageCount(topic);
+        string cleanName = topicName.Contains(':') 
+            ? topicName.Substring(topicName.LastIndexOf(':') + 1).Trim()
+            : topicName.Trim();
+        
+        int textCount = msgTexts.Count(m => m.IndexOf(cleanName, StringComparison.OrdinalIgnoreCase) >= 0);
+        
+        if (textCount == 0)
+        {
+            // Estimate based on total messages and number of topics
+            textCount = Math.Max(1, msgTexts.Count / 10);
+        }
+
+        return textCount;
+    }
+
+    /// <summary>
+    /// Remove message count suffix from topic string
+    /// </summary>
+    private string RemoveMessageCount(string topic)
+    {
+        // Check if the last segment after colon is a number
+        int lastColonIndex = topic.LastIndexOf(':');
+        if (lastColonIndex > 0 && lastColonIndex < topic.Length - 1)
+        {
+            string potentialCount = topic.Substring(lastColonIndex + 1);
+            if (int.TryParse(potentialCount, out int _))
+            {
+                // It's a number, remove it
+                return topic.Substring(0, lastColonIndex);
+            }
+        }
+        
+        return topic;
+    }
+
+    /// <summary>
     /// Check if a string is a category label that should be filtered out
     /// </summary>
     /// <summary>
@@ -1471,6 +1626,14 @@ Extract ONLY actual conversation topics.";
         if (topic.StartsWith("person:", StringComparison.OrdinalIgnoreCase))
         {
             return (3, topic.Substring(7).Trim());  // Group 3 = Person
+        }
+        else if (topic.StartsWith("company:", StringComparison.OrdinalIgnoreCase))
+        {
+            return (6, topic.Substring(8).Trim());  // Group 6 = Company
+        }
+        else if (topic.StartsWith("place:", StringComparison.OrdinalIgnoreCase))
+        {
+            return (7, topic.Substring(6).Trim());  // Group 7 = Place
         }
         else if (topic.StartsWith("date:", StringComparison.OrdinalIgnoreCase))
         {
