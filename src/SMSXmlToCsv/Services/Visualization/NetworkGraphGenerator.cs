@@ -74,6 +74,16 @@ public class TopicItem
 }
 
 /// <summary>
+/// Topic with parent relationship for hierarchical visualization
+/// </summary>
+public class TopicWithParent
+{
+    public string TopicString { get; set; } = string.Empty;
+    public string? ParentTopicName { get; set; }  // Name of parent topic (for creating links later)
+    public string CleanName { get; set; } = string.Empty;  // Clean name without prefixes
+}
+
+/// <summary>
 /// Graph node for network visualization
 /// </summary>
 public class GraphNode
@@ -106,6 +116,10 @@ public class NetworkGraphGenerator
     private readonly OllamaSentimentAnalyzer _ollamaAnalyzer;
     private readonly NetworkGraphOptions _options;
     private readonly AiResponseCache _cache;
+    
+    // Track parent-child relationships for subtopics
+    // Key: topic string (with prefix and count), Value: parent topic clean name
+    private readonly Dictionary<string, string> _topicParents = new Dictionary<string, string>();
 
     public NetworkGraphGenerator(OllamaSentimentAnalyzer ollamaAnalyzer, NetworkGraphOptions? options = null)
     {
@@ -121,6 +135,9 @@ public class NetworkGraphGenerator
     {
         Log.Information("Generating network graph with AI topic detection (legacy algorithm)");
         System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Starting generation - Output: {outputPath}, User: {userName}");
+
+        // Clear parent relationships from previous runs
+        _topicParents.Clear();
 
         // Load cache from disk
         await _cache.LoadAsync();
@@ -512,6 +529,8 @@ public class NetworkGraphGenerator
         Log.Information("Creating {TopicCount} topic nodes", validTopics.Count);
 
         int topicNodeId = 1;
+        Dictionary<string, string> topicNameToNodeId = new Dictionary<string, string>();  // Map topic clean names to node IDs
+        
         foreach (KeyValuePair<string, HashSet<string>> kvp in validTopics)
         {
             string topic = kvp.Key;
@@ -528,25 +547,103 @@ public class NetworkGraphGenerator
                 MessageCount = globalTopicFrequency[topic],
                 Group = groupType
             };
-
-            // Create links from contacts/user to topics
-            foreach (string contactPhone in contactsDiscussingTopic)
+            
+            // Extract clean name for parent lookup
+            string cleanTopicName = RemoveMessageCount(topic);
+            if (cleanTopicName.Contains(':'))
             {
-                // Skip user-to-topic links if option is disabled
-                if (contactPhone == "user" && !_options.IncludeUserLinks)
-                {
-                    continue;
-                }
+                cleanTopicName = cleanTopicName.Substring(cleanTopicName.LastIndexOf(':') + 1).Trim();
+            }
+            topicNameToNodeId[cleanTopicName] = topicNodeIdStr;
 
-                if (contactTopicMessageCounts.ContainsKey(contactPhone) &&
-                    contactTopicMessageCounts[contactPhone].ContainsKey(topic))
+            // Check if this topic is a subtopic (has a parent)
+            bool isSubtopic = _topicParents.ContainsKey(topic);
+            
+            if (isSubtopic)
+            {
+                // This is a subtopic - create link to parent topic instead of contacts
+                string parentTopicName = _topicParents[topic];
+                System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Creating subtopic link: {displayName} -> parent: {parentTopicName}");
+                
+                // Find parent node ID
+                if (topicNameToNodeId.ContainsKey(parentTopicName))
                 {
+                    string parentNodeId = topicNameToNodeId[parentTopicName];
                     links.Add(new GraphLink
                     {
-                        Source = contactPhone,
+                        Source = parentNodeId,
                         Target = topicNodeIdStr,
-                        Value = contactTopicMessageCounts[contactPhone][topic]
+                        Value = globalTopicFrequency[topic]
                     });
+                    System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Linked subtopic '{displayName}' to parent node {parentNodeId}");
+                }
+                else
+                {
+                    // Parent not found yet, will need second pass
+                    Log.Debug("Parent topic '{ParentName}' not found for subtopic '{SubtopicName}' - will try later", 
+                        parentTopicName, displayName);
+                }
+            }
+            else
+            {
+                // Regular topic or top-level entity - create links from contacts/user
+                foreach (string contactPhone in contactsDiscussingTopic)
+                {
+                    // Skip user-to-topic links if option is disabled
+                    if (contactPhone == "user" && !_options.IncludeUserLinks)
+                    {
+                        continue;
+                    }
+
+                    if (contactTopicMessageCounts.ContainsKey(contactPhone) &&
+                        contactTopicMessageCounts[contactPhone].ContainsKey(topic))
+                    {
+                        links.Add(new GraphLink
+                        {
+                            Source = contactPhone,
+                            Target = topicNodeIdStr,
+                            Value = contactTopicMessageCounts[contactPhone][topic]
+                        });
+                    }
+                }
+            }
+        }
+        
+        // Second pass: create any missing subtopic links (in case parent was processed after child)
+        foreach (KeyValuePair<string, HashSet<string>> kvp in validTopics)
+        {
+            string topic = kvp.Key;
+            
+            if (_topicParents.ContainsKey(topic))
+            {
+                string parentTopicName = _topicParents[topic];
+                (int groupType, string displayName) = ParseEntityType(topic);
+                
+                // Extract clean name for lookup
+                string cleanTopicName = RemoveMessageCount(topic);
+                if (cleanTopicName.Contains(':'))
+                {
+                    cleanTopicName = cleanTopicName.Substring(cleanTopicName.LastIndexOf(':') + 1).Trim();
+                }
+                
+                if (topicNameToNodeId.ContainsKey(cleanTopicName) && topicNameToNodeId.ContainsKey(parentTopicName))
+                {
+                    string childNodeId = topicNameToNodeId[cleanTopicName];
+                    string parentNodeId = topicNameToNodeId[parentTopicName];
+                    
+                    // Check if link already exists
+                    bool linkExists = links.Any(l => l.Source == parentNodeId && l.Target == childNodeId);
+                    
+                    if (!linkExists)
+                    {
+                        links.Add(new GraphLink
+                        {
+                            Source = parentNodeId,
+                            Target = childNodeId,
+                            Value = globalTopicFrequency[topic]
+                        });
+                        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Created deferred subtopic link: {displayName} -> parent node {parentNodeId}");
+                    }
                 }
             }
         }
@@ -805,9 +902,10 @@ public class NetworkGraphGenerator
         // Check cache first
         if (_cache.TryGetCached(messageHash, out List<string> cachedTopics))
         {
-            Log.Information("{ContactName} batch {BatchNum}/{TotalBatches}: Using cached topics ({TopicCount} topics)", 
-                contactName, batchNumber, totalBatches, cachedTopics.Count);
-            System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName} batch {batchNumber}/{totalBatches}: CACHE HIT - {cachedTopics.Count} topics");
+            string allTopicsStr = string.Join(", ", cachedTopics);
+            Log.Information("{ContactName} batch {BatchNum}/{TotalBatches}: Using cached topics ({TopicCount} topics): {Topics}", 
+                contactName, batchNumber, totalBatches, cachedTopics.Count, allTopicsStr);
+            System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName} batch {batchNumber}/{totalBatches}: CACHE HIT - {cachedTopics.Count} topics - {allTopicsStr}");
             return cachedTopics;
         }
 
@@ -927,9 +1025,11 @@ Extract ONLY actual conversation topics.";
             // Add to cache
             _cache.AddToCache(messageHash, topics, contactName, batchNumber);
 
+            // Log ALL topics (not just a preview)
+            string allTopicsStr = string.Join(", ", topics);
             Log.Debug("{ContactName} batch {BatchNum}/{TotalBatches}: Found {TopicCount} topics: {Topics}", 
-                contactName, batchNumber, totalBatches, topics.Count, string.Join(", ", topics.Take(10)));
-            System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName} batch {batchNumber}/{totalBatches}: {topics.Count} topics - {string.Join(", ", topics.Take(5))}...");
+                contactName, batchNumber, totalBatches, topics.Count, allTopicsStr);
+            System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName} batch {batchNumber}/{totalBatches}: {topics.Count} topics - {allTopicsStr}");
 
             return topics;
         }
@@ -1042,11 +1142,24 @@ Extract ONLY actual conversation topics.";
             Log.Information("{ContactName} batch {BatchNum}/{TotalBatches}: Successfully parsed {ArrayCount} JSON arrays with {ItemCount} total items", 
                 contactName, batchNumber, totalBatches, arrayCount, topicItems.Count);
 
-            // Flatten topics with prefixes and subtopic notation
-            List<string> flatTopics = new List<string>();
-            FlattenTopics(topicItems, flatTopics, null);
+            // Flatten topics with prefixes and subtopic notation, tracking parent relationships
+            List<TopicWithParent> flatTopicsWithParents = new List<TopicWithParent>();
+            FlattenTopicsWithHierarchy(topicItems, flatTopicsWithParents, null, 0);
 
-            return flatTopics
+            // Store parent relationships in the dictionary for later use
+            foreach (var topicWithParent in flatTopicsWithParents)
+            {
+                if (!string.IsNullOrEmpty(topicWithParent.ParentTopicName))
+                {
+                    _topicParents[topicWithParent.TopicString] = topicWithParent.ParentTopicName;
+                    System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Stored parent relationship: {topicWithParent.TopicString} -> parent: {topicWithParent.ParentTopicName}");
+                }
+            }
+
+            // Extract just the topic strings for return
+            List<string> topicStrings = flatTopicsWithParents.Select(t => t.TopicString).ToList();
+
+            return topicStrings
                 .Where(t => !string.IsNullOrWhiteSpace(t) && t.Length > 2 && t.Length < 150)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
@@ -1124,8 +1237,9 @@ Extract ONLY actual conversation topics.";
 
     /// <summary>
     /// Recursively flatten topics and subtopics with proper naming and message counts
+    /// Returns a list of topics with parent relationships for hierarchical visualization
     /// </summary>
-    private void FlattenTopics(List<TopicItem> items, List<string> output, string? parentPrefix)
+    private void FlattenTopicsWithHierarchy(List<TopicItem> items, List<TopicWithParent> output, string? parentTopicName, int parentMessageCount = 0)
     {
         foreach (var item in items)
         {
@@ -1135,50 +1249,65 @@ Extract ONLY actual conversation topics.";
             // Build the topic string with appropriate prefix
             string topicString;
             string cleanName = item.Name.Trim();
+            
+            // If message count is 0 or missing, use parent's count or estimate
+            int messageCount = item.MessageCount;
+            if (messageCount == 0 && parentMessageCount > 0)
+            {
+                // Subtopics inherit a portion of parent's count
+                messageCount = Math.Max(1, parentMessageCount / 2);
+                System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Subtopic '{cleanName}' had 0 count, using {messageCount} from parent");
+            }
 
             // Add type prefix for non-topic types and include message count
             switch (item.Type?.ToLower())
             {
                 case "person":
-                    topicString = $"person:{cleanName}:{item.MessageCount}";
+                    topicString = $"person:{cleanName}:{messageCount}";
                     break;
                 case "company":
-                    topicString = $"company:{cleanName}:{item.MessageCount}";
+                    topicString = $"company:{cleanName}:{messageCount}";
                     break;
                 case "place":
-                    topicString = $"place:{cleanName}:{item.MessageCount}";
+                    topicString = $"place:{cleanName}:{messageCount}";
                     break;
                 case "date":
                 case "event":
-                    topicString = $"date:{cleanName}:{item.MessageCount}";
+                    topicString = $"date:{cleanName}:{messageCount}";
                     break;
                 case "promise":
-                    topicString = $"promise:{cleanName}:{item.MessageCount}";
+                    topicString = $"promise:{cleanName}:{messageCount}";
                     break;
                 case "relationship":
-                    topicString = $"relationship:{cleanName}:{item.MessageCount}";
+                    topicString = $"relationship:{cleanName}:{messageCount}";
                     break;
                 default:
-                    // For subtopics, indicate parent relationship
-                    if (!string.IsNullOrEmpty(parentPrefix))
+                    // For subtopics, mark them as subtopics
+                    if (!string.IsNullOrEmpty(parentTopicName))
                     {
-                        topicString = $"subtopic:{cleanName} ({parentPrefix}):{item.MessageCount}";  // e.g., "subtopic:deadlines (work):5"
-                        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Flattening subtopic: {topicString}");
+                        topicString = $"subtopic:{cleanName}:{messageCount}";
+                        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Flattening subtopic: {topicString} (parent: {parentTopicName})");
                     }
                     else
                     {
-                        topicString = $"{cleanName}:{item.MessageCount}";
+                        topicString = $"{cleanName}:{messageCount}";
                     }
                     break;
             }
 
-            output.Add(topicString);
+            // Add to output with parent reference
+            output.Add(new TopicWithParent
+            {
+                TopicString = topicString,
+                ParentTopicName = parentTopicName,
+                CleanName = cleanName
+            });
 
-            // Recursively process subtopics
+            // Recursively process subtopics, passing the current topic as parent
             if (item.SubTopics != null && item.SubTopics.Count > 0)
             {
                 System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Processing {item.SubTopics.Count} subtopics for '{cleanName}'");
-                FlattenTopics(item.SubTopics, output, cleanName);
+                FlattenTopicsWithHierarchy(item.SubTopics, output, cleanName, messageCount);
             }
         }
     }
