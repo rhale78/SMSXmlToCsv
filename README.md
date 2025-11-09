@@ -34,6 +34,41 @@ A comprehensive .NET 9 console application for importing, consolidating, and exp
 - **All-in-One**: Single file containing all messages
 - **Per-Contact**: Separate files organized by contact in dedicated folders
 
+### 🧠 AI-Powered Network Graph (NEW)
+
+The application includes advanced AI-powered conversation analysis and network graph visualization:
+
+- **Intelligent Topic Extraction**: Uses Ollama AI to identify topics, people, companies, places, dates, events, and promises discussed in conversations
+- **Hierarchical Subtopics**: Automatically detects and visualizes subtopics nested under main topics
+- **Response Caching**: File-based caching system to avoid re-processing the same messages (stored in `data/` folder)
+- **Configurable Limits**: 
+  - `MinMessagesPerContact`: Minimum messages required per contact (-1 for no minimum, default: 2)
+  - `MinTopicMessageCount`: Minimum mentions for a topic to be included (-1 for all topics, default: -1)
+  - `MaxTopicsPerContact`: Maximum topics per contact (-1 for unlimited, default: -1)
+- **Enhanced JSON Parsing**: Robust handling of malformed AI responses with automatic bracket matching and error recovery
+- **Entity Detection**: Automatically identifies:
+  - **Topics** (general subjects) - Orange nodes
+  - **People mentioned** (by name) - Red nodes
+  - **Companies** (businesses, organizations) - Deep Orange nodes
+  - **Places** (locations, venues) - Light Green nodes
+  - **Dates/Events** - Purple nodes
+  - **Promises** (commitments) - Cyan nodes
+  - **Subtopics** (nested topics) - Amber nodes
+- **Interactive D3.js Visualization**: Click nodes to highlight connections, zoom, and pan through the graph
+- **Message Count Display**: All entity nodes show the number of messages they were mentioned in
+- **Both-Sides Analysis**: Optional analysis of both sent and received messages to capture full conversation context
+- **Extended Timeout**: 5-minute HTTP timeout for AI processing of large message batches
+- **Unknown Contact Handling**: Properly detects and skips contacts with "Unknown" or "(Unknown)" names
+
+### 📊 Analysis & Reports
+
+- **Thread Analysis**: Detect conversation threads with configurable timeout
+- **Response Time Analysis**: Calculate average, median, min, and max response times
+- **Advanced Statistics**: Comprehensive message statistics and analytics
+- **Sentiment Analysis**: AI-powered sentiment detection (requires Ollama)
+- **Message Search**: Interactive search through imported messages
+- **PDF Reports**: Generate comprehensive PDF reports with statistics
+
 ## Project Structure
 
 ```
@@ -116,6 +151,28 @@ The application is configured via `appsettings.json`:
 - `{project}` - Project name
 - `{contact_name}` - Contact name (for per-contact exports)
 
+### AI Features Setup (Optional)
+
+For AI-powered features like network graph visualization and sentiment analysis:
+
+1. **Install Ollama**: Download from [https://ollama.ai](https://ollama.ai)
+2. **Pull a recommended model**:
+   ```bash
+   ollama pull llama3.2    # Recommended: good balance of speed and accuracy
+   # Or choose from: llama3.1, mistral, phi3, gemma2
+   ```
+3. **Start Ollama**: The service should be running at `http://localhost:11434`
+
+#### AI Response Cache
+
+The application automatically caches AI responses in a `data/` folder located next to the executable:
+- Responses are cached based on message content hash (SHA256)
+- Cache persists between runs to avoid reprocessing
+- Cache includes contact name, batch number, topics, and timestamp
+- Old cache entries (>30 days) can be cleaned up automatically
+
+To clear the cache, simply delete the `data/` directory.
+
 ## Architecture
 
 ### Data Models
@@ -192,6 +249,34 @@ This project follows strict coding standards:
 - **MimeKit** - Email parsing
 - **HtmlAgilityPack** - HTML parsing
 - **Microsoft.Extensions.Configuration** - Configuration management
+
+## Recent Improvements
+
+### AI & Network Graph Enhancements (Latest)
+
+- **Improved JSON Parsing**: Enhanced error handling with automatic bracket matching and repair for malformed AI responses
+- **Extended HTTP Timeout**: Increased from 2 to 5 minutes for reliable AI processing
+- **Unknown Contact Detection**: Fixed to properly handle both "Unknown" and "(Unknown)" contact names
+- **Company & Place Detection**: Added new entity types for automatic detection of businesses and locations
+- **Message Count Accuracy**: Now uses AI-provided message counts instead of recalculating, fixing inflated count issues
+- **AI Response Caching**: Implemented SHA256-based file caching to avoid reprocessing messages
+  - Dramatically speeds up repeated runs
+  - Cache stored in `data/` folder with automatic management
+  - Prevents hitting API rate limits
+- **Configurable Topic Limits**: Made all limits configurable instead of hardcoded
+  - `MinMessagesPerContact`: -1 for no minimum (process all contacts)
+  - `MinTopicMessageCount`: -1 to include all topics regardless of frequency
+  - `MaxTopicsPerContact`: -1 for unlimited topics per contact
+- **Enhanced Logging**: All topics are now logged (not just previews), with output to both log file and debug window
+- **Subtopic Support**: Added dedicated node type (group 8) with amber color for hierarchical topic relationships
+- **Better Entity Visualization**: Each entity type has distinct colors and is properly labeled in the legend
+
+### Key Bug Fixes
+
+- Fixed topic count inflation issues (was showing 200s when mentioned 3-4 times)
+- Resolved "You" side message processing for better two-person conversation analysis
+- Improved data completeness for high-volume sources (e.g., Google Talk with 10,000s of messages)
+- Enhanced topic linking to contacts to show all relevant topics
 
 ## License
 

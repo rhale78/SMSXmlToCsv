@@ -81,9 +81,9 @@ public class GraphNode
     public string Id { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public int MessageCount { get; set; }
-    public int Group { get; set; }  // 0 = user, 1 = contact, 2 = topic, 3 = person mentioned, 4 = date/event, 5 = promise, 6 = company, 7 = place
+    public int Group { get; set; }  // 0 = user, 1 = contact, 2 = topic, 3 = person mentioned, 4 = date/event, 5 = promise, 6 = company, 7 = place, 8 = subtopic
     public List<string> TopTopics { get; set; } = new List<string>();
-    public string? EntityType { get; set; }  // For named entities: "person", "company", "place", "date", "event", "promise", "relationship"
+    public string? EntityType { get; set; }  // For named entities: "person", "company", "place", "date", "event", "promise", "relationship", "subtopic"
     public string? ParentTopic { get; set; }  // For subtopics, reference to parent topic ID
 }
 
@@ -1162,7 +1162,8 @@ Extract ONLY actual conversation topics.";
                     // For subtopics, indicate parent relationship
                     if (!string.IsNullOrEmpty(parentPrefix))
                     {
-                        topicString = $"{cleanName} ({parentPrefix}):{item.MessageCount}";  // e.g., "deadlines (work):5"
+                        topicString = $"subtopic:{cleanName} ({parentPrefix}):{item.MessageCount}";  // e.g., "subtopic:deadlines (work):5"
+                        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Flattening subtopic: {topicString}");
                     }
                     else
                     {
@@ -1176,6 +1177,7 @@ Extract ONLY actual conversation topics.";
             // Recursively process subtopics
             if (item.SubTopics != null && item.SubTopics.Count > 0)
             {
+                System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Processing {item.SubTopics.Count} subtopics for '{cleanName}'");
                 FlattenTopics(item.SubTopics, output, cleanName);
             }
         }
@@ -1364,6 +1366,10 @@ Extract ONLY actual conversation topics.";
             <div class=""legend-color"" style=""background-color: #8BC34A;""></div>
             <span>Places</span>
         </div>
+        <div class=""legend-item"">
+            <div class=""legend-color"" style=""background-color: #FFC107;""></div>
+            <span>Subtopics</span>
+        </div>
         <div style=""margin-top: 10px; font-size: 11px; color: #aaa;"">
             Click any node to highlight its connections
         </div>
@@ -1450,6 +1456,7 @@ Extract ONLY actual conversation topics.";
                 if (d.group === 5) return '#00BCD4';  // Promise - cyan
                 if (d.group === 6) return '#FF5722';  // Company - deep orange
                 if (d.group === 7) return '#8BC34A';  // Place - light green
+                if (d.group === 8) return '#FFC107';  // Subtopic - amber
                 return '#999999';  // Unknown - gray
             }})
             .call(d3.drag()
@@ -1686,7 +1693,11 @@ Extract ONLY actual conversation topics.";
     /// </summary>
     private (int groupType, string displayName) ParseEntityType(string topic)
     {
-        if (topic.StartsWith("person:", StringComparison.OrdinalIgnoreCase))
+        if (topic.StartsWith("subtopic:", StringComparison.OrdinalIgnoreCase))
+        {
+            return (8, topic.Substring(9).Trim());  // Group 8 = Subtopic
+        }
+        else if (topic.StartsWith("person:", StringComparison.OrdinalIgnoreCase))
         {
             return (3, topic.Substring(7).Trim());  // Group 3 = Person
         }
