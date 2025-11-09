@@ -41,6 +41,24 @@ public class NetworkGraphOptions
     /// Skip contacts with "Unknown" as contact name
     /// </summary>
     public bool SkipUnknownContacts { get; set; } = true;
+    
+    /// <summary>
+    /// Minimum number of messages required for topic extraction per contact
+    /// Set to -1 to disable minimum (process all contacts)
+    /// </summary>
+    public int MinMessagesPerContact { get; set; } = 2;
+    
+    /// <summary>
+    /// Minimum message count for a topic to be included in the graph
+    /// Set to -1 to disable minimum (include all topics)
+    /// </summary>
+    public int MinTopicMessageCount { get; set; } = -1;  // -1 = no minimum, include all
+    
+    /// <summary>
+    /// Maximum number of topics to include per contact
+    /// Set to -1 for unlimited topics
+    /// </summary>
+    public int MaxTopicsPerContact { get; set; } = -1;  // -1 = unlimited
 }
 
 /// <summary>
@@ -85,15 +103,15 @@ public class GraphLink
 /// </summary>
 public class NetworkGraphGenerator
 {
-    private const bool UNLIMITED_TOPICS_MODE = true;  // From legacy - works well
-    private const int MIN_TOPIC_MESSAGES = 2;  // From legacy
     private readonly OllamaSentimentAnalyzer _ollamaAnalyzer;
     private readonly NetworkGraphOptions _options;
+    private readonly AiResponseCache _cache;
 
     public NetworkGraphGenerator(OllamaSentimentAnalyzer ollamaAnalyzer, NetworkGraphOptions? options = null)
     {
         _ollamaAnalyzer = ollamaAnalyzer ?? throw new ArgumentNullException(nameof(ollamaAnalyzer));
         _options = options ?? new NetworkGraphOptions();
+        _cache = new AiResponseCache();
     }
 
     /// <summary>
@@ -103,6 +121,16 @@ public class NetworkGraphGenerator
     {
         Log.Information("Generating network graph with AI topic detection (legacy algorithm)");
         System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Starting generation - Output: {outputPath}, User: {userName}");
+
+        // Load cache from disk
+        await _cache.LoadAsync();
+        var cacheStats = _cache.GetStatistics();
+        if (cacheStats.totalEntries > 0)
+        {
+            Log.Information("Loaded AI cache with {Count} entries (oldest: {Oldest}, newest: {Newest})", 
+                cacheStats.totalEntries, cacheStats.oldestEntry, cacheStats.newestEntry);
+            System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Cache loaded: {cacheStats.totalEntries} entries");
+        }
 
         if (!await _ollamaAnalyzer.IsAvailableAsync())
         {
@@ -289,7 +317,8 @@ public class NetworkGraphGenerator
                     string contactPhone = contactKvp.Key;
                     List<string> msgTexts = contactKvp.Value;
 
-                    if (msgTexts.Count < MIN_TOPIC_MESSAGES)
+                    // Check minimum messages per contact (-1 means no minimum)
+                    if (_options.MinMessagesPerContact >= 0 && msgTexts.Count < _options.MinMessagesPerContact)
                     {
                         continue;
                     }
@@ -313,9 +342,10 @@ public class NetworkGraphGenerator
                             // Store ALL topics for detailed logging
                             allContactTopics.Add((nodes[contactPhone].Name, contactTopics.ToList()));
 
-                            nodes[contactPhone].TopTopics = UNLIMITED_TOPICS_MODE
+                            // Apply max topics limit if configured (-1 means unlimited)
+                            nodes[contactPhone].TopTopics = (_options.MaxTopicsPerContact < 0)
                                 ? contactTopics.ToList()
-                                : contactTopics.Take(10).ToList();
+                                : contactTopics.Take(_options.MaxTopicsPerContact).ToList();
 
                             foreach (string topic in contactTopics)
                             {
@@ -361,7 +391,8 @@ public class NetworkGraphGenerator
                         string contactPhone = userKvp.Key;
                         List<string> msgTexts = userKvp.Value;
 
-                        if (msgTexts.Count < MIN_TOPIC_MESSAGES)
+                        // Check minimum messages per contact (-1 means no minimum)
+                        if (_options.MinMessagesPerContact >= 0 && msgTexts.Count < _options.MinMessagesPerContact)
                         {
                             continue;
                         }
@@ -459,16 +490,24 @@ public class NetworkGraphGenerator
             AnsiConsole.MarkupLine($"[red]! Encountered errors for {errorContacts.Count} contacts see logs for details[/]");
         }
 
-        // Filter and create topic nodes (from legacy)
-        List<KeyValuePair<string, HashSet<string>>> validTopics = UNLIMITED_TOPICS_MODE
-            ? topicToContacts
-                .Where(kvp => globalTopicFrequency[kvp.Key] >= MIN_TOPIC_MESSAGES)
-                .OrderByDescending(kvp => globalTopicFrequency[kvp.Key])
-                .ToList()
-            : topicToContacts
+        // Filter and create topic nodes based on configured limits
+        List<KeyValuePair<string, HashSet<string>>> validTopics;
+        if (_options.MinTopicMessageCount < 0)
+        {
+            // No minimum - include all topics
+            validTopics = topicToContacts
                 .Where(kvp => globalTopicFrequency[kvp.Key] > 0)
                 .OrderByDescending(kvp => globalTopicFrequency[kvp.Key])
                 .ToList();
+        }
+        else
+        {
+            // Apply minimum topic message count
+            validTopics = topicToContacts
+                .Where(kvp => globalTopicFrequency[kvp.Key] >= _options.MinTopicMessageCount)
+                .OrderByDescending(kvp => globalTopicFrequency[kvp.Key])
+                .ToList();
+        }
 
         Log.Information("Creating {TopicCount} topic nodes", validTopics.Count);
 
@@ -521,6 +560,10 @@ public class NetworkGraphGenerator
         Log.Information("Network graph stats - Total Nodes: {TotalNodes} (User: 1, Contacts: {Contacts}, Topics: {Topics}), Links: {Links}", 
             nodes.Count, contactNodes, topicNodes, links.Count);
         System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Final graph - Nodes: {nodes.Count} (User: 1, Contacts: {contactNodes}, Topics: {topicNodes}), Links: {links.Count}");
+
+        // Save cache to disk
+        await _cache.SaveAsync();
+        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Cache saved with {_cache.GetStatistics().totalEntries} entries");
 
         // Generate HTML
         await GenerateHtmlAsync(nodes.Values.ToList(), links, outputPath);
@@ -590,8 +633,8 @@ public class NetworkGraphGenerator
             string contactKey = kvp.Key;
             List<Message> contactMessages = kvp.Value;
             
-            // Skip contacts with too few messages
-            if (contactMessages.Count < MIN_TOPIC_MESSAGES)
+            // Skip contacts with too few messages if minimum is configured
+            if (_options.MinMessagesPerContact >= 0 && contactMessages.Count < _options.MinMessagesPerContact)
             {
                 skippedCount++;
                 continue;
@@ -625,7 +668,8 @@ public class NetworkGraphGenerator
         AnsiConsole.MarkupLine($"[green]✓ Generated {processedCount} network graphs[/]");
         if (skippedCount > 0)
         {
-            AnsiConsole.MarkupLine($"[yellow]! Skipped {skippedCount} contacts with insufficient messages (< {MIN_TOPIC_MESSAGES})[/]");
+            string minMsg = _options.MinMessagesPerContact < 0 ? "N/A" : _options.MinMessagesPerContact.ToString();
+            AnsiConsole.MarkupLine($"[yellow]! Skipped {skippedCount} contacts with insufficient messages (< {minMsg})[/]");
         }
         Log.Information("Per-contact network graphs completed: {ProcessedCount} generated, {SkippedCount} skipped", 
             processedCount, skippedCount);
@@ -672,7 +716,8 @@ public class NetworkGraphGenerator
     /// </summary>
     private async Task<List<string>> ExtractTopicsAsync(List<string> messageTexts, string contactName, Action<string>? statusUpdate = null, bool extractEntities = false)
     {
-        if (messageTexts.Count < MIN_TOPIC_MESSAGES)
+        // Check minimum messages if configured (-1 means no minimum)
+        if (_options.MinMessagesPerContact >= 0 && messageTexts.Count < _options.MinMessagesPerContact)
         {
             return new List<string>();
         }
@@ -754,6 +799,21 @@ public class NetworkGraphGenerator
     /// </summary>
     private async Task<List<string>> ExtractTopicsBatchAsync(List<string> batchMessages, string contactName, int batchNumber, int totalBatches, bool extractEntities = false)
     {
+        // Compute hash for this batch
+        string messageHash = _cache.ComputeHash(batchMessages, contactName, batchNumber);
+        
+        // Check cache first
+        if (_cache.TryGetCached(messageHash, out List<string> cachedTopics))
+        {
+            Log.Information("{ContactName} batch {BatchNum}/{TotalBatches}: Using cached topics ({TopicCount} topics)", 
+                contactName, batchNumber, totalBatches, cachedTopics.Count);
+            System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName} batch {batchNumber}/{totalBatches}: CACHE HIT - {cachedTopics.Count} topics");
+            return cachedTopics;
+        }
+
+        // Cache miss - need to call AI
+        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName} batch {batchNumber}/{totalBatches}: CACHE MISS - calling AI");
+
         StringBuilder sb = new StringBuilder();
         sb.AppendLine($"Messages from conversation with {contactName} (batch {batchNumber}/{totalBatches}):");
         
@@ -863,6 +923,9 @@ Extract ONLY actual conversation topics.";
 
             // Parse JSON response
             List<string> topics = ParseJsonTopics(response, contactName, batchNumber, totalBatches);
+
+            // Add to cache
+            _cache.AddToCache(messageHash, topics, contactName, batchNumber);
 
             Log.Debug("{ContactName} batch {BatchNum}/{TotalBatches}: Found {TopicCount} topics: {Topics}", 
                 contactName, batchNumber, totalBatches, topics.Count, string.Join(", ", topics.Take(10)));

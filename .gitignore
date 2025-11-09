@@ -35,3 +35,7 @@ TestResults/
 # Temporary files
 *.tmp
 *.cache
+
+# AI cache data
+data/
+**/data/
