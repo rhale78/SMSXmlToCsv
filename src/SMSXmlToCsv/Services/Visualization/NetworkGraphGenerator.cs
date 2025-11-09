@@ -46,7 +46,7 @@ public class NetworkGraphOptions
     /// Minimum number of messages required for topic extraction per contact
     /// Set to -1 to disable minimum (process all contacts)
     /// </summary>
-    public int MinMessagesPerContact { get; set; } = 2;
+    public int MinMessagesPerContact { get; set; } = -1;  // Changed to -1 to show all topics
     
     /// <summary>
     /// Minimum message count for a topic to be included in the graph
@@ -147,6 +147,27 @@ public class NetworkGraphGenerator
             Log.Information("Loaded AI cache with {Count} entries (oldest: {Oldest}, newest: {Newest})", 
                 cacheStats.totalEntries, cacheStats.oldestEntry, cacheStats.newestEntry);
             System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Cache loaded: {cacheStats.totalEntries} entries");
+            
+            // Prompt user to clear cache (with red warning)
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine($"[yellow]Found existing AI response cache with {cacheStats.totalEntries} entries[/]");
+            AnsiConsole.MarkupLine($"[dim]Oldest entry: {cacheStats.oldestEntry}, Newest: {cacheStats.newestEntry}[/]");
+            
+            bool clearCache = AnsiConsole.Confirm(
+                "[red]Clear cache and reprocess all messages?[/] [dim](This will require re-running AI analysis for all contacts)[/]", 
+                defaultValue: false);
+            
+            if (clearCache)
+            {
+                _cache.Clear();
+                AnsiConsole.MarkupLine("[yellow]✓ Cache cleared - all messages will be reprocessed[/]");
+                Log.Information("User cleared AI cache - will reprocess all messages");
+            }
+            else
+            {
+                AnsiConsole.MarkupLine("[green]✓ Using cached responses - only new/changed messages will be processed[/]");
+            }
+            AnsiConsole.WriteLine();
         }
 
         if (!await _ollamaAnalyzer.IsAvailableAsync())
@@ -531,6 +552,7 @@ public class NetworkGraphGenerator
         int topicNodeId = 1;
         Dictionary<string, string> topicNameToNodeId = new Dictionary<string, string>();  // Map topic clean names to node IDs
         
+        // First pass: Create all nodes and map names to IDs
         foreach (KeyValuePair<string, HashSet<string>> kvp in validTopics)
         {
             string topic = kvp.Key;
@@ -555,13 +577,32 @@ public class NetworkGraphGenerator
                 cleanTopicName = cleanTopicName.Substring(cleanTopicName.LastIndexOf(':') + 1).Trim();
             }
             topicNameToNodeId[cleanTopicName] = topicNodeIdStr;
+        }
+        
+        // Second pass: Create links
+        foreach (KeyValuePair<string, HashSet<string>> kvp in validTopics)
+        {
+            string topic = kvp.Key;
+            HashSet<string> contactsDiscussingTopic = kvp.Value;
+            
+            // Parse entity type and name from prefixed topics
+            (int groupType, string displayName) = ParseEntityType(topic);
+            
+            // Extract clean name for lookup
+            string cleanTopicName = RemoveMessageCount(topic);
+            if (cleanTopicName.Contains(':'))
+            {
+                cleanTopicName = cleanTopicName.Substring(cleanTopicName.LastIndexOf(':') + 1).Trim();
+            }
+            
+            string topicNodeIdStr = topicNameToNodeId[cleanTopicName];
 
             // Check if this topic is a subtopic (has a parent)
             bool isSubtopic = _topicParents.ContainsKey(topic);
             
             if (isSubtopic)
             {
-                // This is a subtopic - create link to parent topic instead of contacts
+                // This is a subtopic - create link to parent topic
                 string parentTopicName = _topicParents[topic];
                 System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Creating subtopic link: {displayName} -> parent: {parentTopicName}");
                 
@@ -579,14 +620,19 @@ public class NetworkGraphGenerator
                 }
                 else
                 {
-                    // Parent not found yet, will need second pass
-                    Log.Debug("Parent topic '{ParentName}' not found for subtopic '{SubtopicName}' - will try later", 
+                    // Parent not found - log warning but still create contact links
+                    Log.Warning("Parent topic '{ParentName}' not found for subtopic '{SubtopicName}'", 
                         parentTopicName, displayName);
+                    System.Diagnostics.Debug.WriteLine($"[NET GRAPH] WARNING: Parent '{parentTopicName}' not found for subtopic '{displayName}', linking to contacts instead");
+                    
+                    // Fall through to create contact links as fallback
+                    isSubtopic = false;
                 }
             }
-            else
+            
+            // For non-subtopics OR if parent not found, create links from contacts/user
+            if (!isSubtopic)
             {
-                // Regular topic or top-level entity - create links from contacts/user
                 foreach (string contactPhone in contactsDiscussingTopic)
                 {
                     // Skip user-to-topic links if option is disabled
@@ -604,45 +650,6 @@ public class NetworkGraphGenerator
                             Target = topicNodeIdStr,
                             Value = contactTopicMessageCounts[contactPhone][topic]
                         });
-                    }
-                }
-            }
-        }
-        
-        // Second pass: create any missing subtopic links (in case parent was processed after child)
-        foreach (KeyValuePair<string, HashSet<string>> kvp in validTopics)
-        {
-            string topic = kvp.Key;
-            
-            if (_topicParents.ContainsKey(topic))
-            {
-                string parentTopicName = _topicParents[topic];
-                (int groupType, string displayName) = ParseEntityType(topic);
-                
-                // Extract clean name for lookup
-                string cleanTopicName = RemoveMessageCount(topic);
-                if (cleanTopicName.Contains(':'))
-                {
-                    cleanTopicName = cleanTopicName.Substring(cleanTopicName.LastIndexOf(':') + 1).Trim();
-                }
-                
-                if (topicNameToNodeId.ContainsKey(cleanTopicName) && topicNameToNodeId.ContainsKey(parentTopicName))
-                {
-                    string childNodeId = topicNameToNodeId[cleanTopicName];
-                    string parentNodeId = topicNameToNodeId[parentTopicName];
-                    
-                    // Check if link already exists
-                    bool linkExists = links.Any(l => l.Source == parentNodeId && l.Target == childNodeId);
-                    
-                    if (!linkExists)
-                    {
-                        links.Add(new GraphLink
-                        {
-                            Source = parentNodeId,
-                            Target = childNodeId,
-                            Value = globalTopicFrequency[topic]
-                        });
-                        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Created deferred subtopic link: {displayName} -> parent node {parentNodeId}");
                     }
                 }
             }
@@ -878,17 +885,23 @@ public class NetworkGraphGenerator
             }
         }
 
-        // Sort by frequency and take top 250
-        var sortedTopics = allTopics
-            .OrderByDescending(t => topicFrequency[t])
-            .Take(250)
-            .ToList();
+        // Sort by frequency and respect max topics setting
+        IEnumerable<string> sortedTopics = allTopics
+            .OrderByDescending(t => topicFrequency[t]);
+        
+        // Apply max topics limit if configured (-1 means unlimited)
+        if (_options.MaxTopicsPerContact > 0)
+        {
+            sortedTopics = sortedTopics.Take(_options.MaxTopicsPerContact);
+        }
+        
+        var finalTopics = sortedTopics.ToList();
 
         Log.Information("{ContactName}: Aggregated {TopicCount} unique topics from {BatchCount} batches", 
-            contactName, sortedTopics.Count, totalBatches);
-        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName}: Final {sortedTopics.Count} topics after aggregation");
+            contactName, finalTopics.Count, totalBatches);
+        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName}: Final {finalTopics.Count} topics after aggregation");
 
-        return sortedTopics;
+        return finalTopics;
     }
 
     /// <summary>
