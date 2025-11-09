@@ -129,7 +129,7 @@ public class SmsXmlImporter : IDataImporter
 
             // Parse timestamp (seconds since Unix epoch for MMS)
             long dateSec = long.Parse(dateStr);
-            DateTimeOffset timestamp = DateTimeOffset.FromUnixTimeSeconds(dateSec);
+            DateTimeOffset timestamp = DateTimeOffset.FromUnixTimeMilliseconds(dateSec);
 
             // Parse direction (1 = received, 2 = sent)
             int msgBox = int.Parse(msgBoxStr);
@@ -170,7 +170,7 @@ public class SmsXmlImporter : IDataImporter
             }
 
             // Create contacts
-            Contact contact = !string.IsNullOrEmpty(address) 
+            Contact contact = !string.IsNullOrEmpty(address)
                 ? Contact.FromPhoneNumber(contactName, address)
                 : Contact.FromName(contactName);
             Contact self = Contact.FromName("Me");
