@@ -173,7 +173,7 @@ public class NetworkGraphGenerator
         if (!await _ollamaAnalyzer.IsAvailableAsync())
         {
             System.Diagnostics.Debug.WriteLine("[NET GRAPH] ERROR: Ollama not available");
-            throw new InvalidOperationException("Ollama is not available. Install from: https://ollama.ai and run: ollama pull llama3.2");
+            throw new InvalidOperationException("Ollama is not available. Install from: https://ollima.ai and run: Ollama pull llama3.2");
         }
 
         List<Message> messageList = messages.ToList();
@@ -208,8 +208,14 @@ public class NetworkGraphGenerator
         // Extract contacts and their messages (both sides if enabled)
         foreach (Message message in messageList)
         {
-            string contactName = ExtractContactName(message, userName);
-            string contactPhone = ExtractContactPhone(message, userName);
+            // Use message's virtual methods for validation and extraction
+            if (!message.IsValid())
+            {
+                continue; // Skip invalid messages
+            }
+
+            string contactName = message.GetContactName(message.Direction);
+            string contactPhone = message.GetContactIdentifier(message.Direction);
 
             if (string.IsNullOrEmpty(contactPhone) || contactPhone == "Unknown")
             {
@@ -702,8 +708,13 @@ public class NetworkGraphGenerator
         
         foreach (Message message in messageList)
         {
-            string contactName = ExtractContactName(message, userName);
-            string contactPhone = ExtractContactPhone(message, userName);
+            if (!message.IsValid())
+            {
+                continue;
+            }
+
+            string contactName = message.GetContactName(message.Direction);
+            string contactPhone = message.GetContactIdentifier(message.Direction);
 
             if (string.IsNullOrEmpty(contactPhone) || contactPhone == "Unknown")
             {
@@ -780,43 +791,8 @@ public class NetworkGraphGenerator
     }
 
     /// <summary>
-    /// Extract contact name from Message (fixed version)
-    /// </summary>
-    private string ExtractContactName(Message message, string userName)
-    {
-        // Determine the contact (the person who is NOT the user)
-        if (message.Direction == MessageDirection.Sent)
-        {
-            // Sent message - contact is the recipient
-            return !string.IsNullOrEmpty(message.To?.Name) ? message.To.Name : "Unknown";
-        }
-        else
-        {
-            // Received message - contact is the sender
-            return !string.IsNullOrEmpty(message.From?.Name) ? message.From.Name : "Unknown";
-        }
-    }
-
-    /// <summary>
-    /// Extract contact phone from Message (fixed version)
-    /// </summary>
-    private string ExtractContactPhone(Message message, string userName)
-    {
-        // Determine the contact phone (the phone that is NOT the user's)
-        if (message.Direction == MessageDirection.Sent)
-        {
-            // Sent message - contact is the recipient
-            return message.To?.PhoneNumbers?.FirstOrDefault() ?? "Unknown";
-        }
-        else
-        {
-            // Received message - contact is the sender
-            return message.From?.PhoneNumbers?.FirstOrDefault() ?? "Unknown";
-        }
-    }
-
-    /// <summary>
     /// Extract topics using AI with batching for large message sets
+    /// Dynamic batch sizing based on message type
     /// </summary>
     private async Task<List<string>> ExtractTopicsAsync(List<string> messageTexts, string contactName, Action<string>? statusUpdate = null, bool extractEntities = false)
     {
@@ -826,7 +802,23 @@ public class NetworkGraphGenerator
             return new List<string>();
         }
 
-        const int BATCH_SIZE = 75;  // Optimal batch size for Ollama
+        // Determine batch size based on message type and count
+        int smsCount = messageTexts.Count(m => m.Length <= 160);
+        int mmsCount = messageTexts.Count(m => m.Length > 160 && m.Length <= 1000);
+        int longMediaCount = messageTexts.Count(m => m.Length > 1000);  // Very long messages or media
+
+        // SMS messages can be processed in larger batches
+        int batchSize = 75;  // Default batch size
+        if (smsCount > 10 && mmsCount == 0 && longMediaCount == 0)
+        {
+            // All SMS, relatively small messages
+            batchSize = Math.Min(150, smsCount / 2);
+        }
+        else if (mmsCount > 0 || longMediaCount > 0)
+        {
+            // MMS or long media files - more conservative batching
+            batchSize = Math.Min(50, smsCount / 4);
+        }
 
         // For smaller message sets, process in one batch
         if (messageTexts.Count <= 100)
@@ -838,7 +830,7 @@ public class NetworkGraphGenerator
         List<string> allTopics = new List<string>();
         Dictionary<string, int> topicFrequency = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         
-        int totalBatches = (int)Math.Ceiling(messageTexts.Count / (double)BATCH_SIZE);
+        int totalBatches = (int)Math.Ceiling(messageTexts.Count / (double)batchSize);
         
         Log.Information("Processing {MessageCount} messages for {ContactName} in {BatchCount} batches", 
             messageTexts.Count, contactName, totalBatches);
@@ -849,8 +841,8 @@ public class NetworkGraphGenerator
         for (int i = 0; i < totalBatches; i++)
         {
             int batchNumber = i + 1;
-            int skip = i * BATCH_SIZE;
-            int take = Math.Min(BATCH_SIZE, messageTexts.Count - skip);
+            int skip = i * batchSize;
+            int take = Math.Min(batchSize, messageTexts.Count - skip);
             List<string> batchMessages = messageTexts.Skip(skip).Take(take).ToList();
 
             statusUpdate?.Invoke($"AI analyzing {contactName} (batch {batchNumber}/{totalBatches})");
@@ -1203,7 +1195,7 @@ Extract ONLY actual conversation topics.";
         // Remove any trailing commas before closing brackets
         json = System.Text.RegularExpressions.Regex.Replace(json, @",\s*}", "}");
         json = System.Text.RegularExpressions.Regex.Replace(json, @",\s*]", "]");
-        
+
         // Try to balance brackets
         int openBraces = json.Count(c => c == '{');
         int closeBraces = json.Count(c => c == '}');
@@ -1292,7 +1284,7 @@ Extract ONLY actual conversation topics.";
                     topicString = $"promise:{cleanName}:{messageCount}";
                     break;
                 case "relationship":
-                    topicString = $"relationship:{cleanName}:{messageCount}";
+                    topicString = $"person:{cleanName}:{messageCount}";
                     break;
                 default:
                     // For subtopics, mark them as subtopics

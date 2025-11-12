@@ -2,13 +2,15 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Serilog;
 using Spectre.Console;
-using SMSXmlToCsv.Exporters;
-using SMSXmlToCsv.Importers;
 using SMSXmlToCsv.Models;
+using SMSXmlToCsv.Importers;
 using SMSXmlToCsv.Services;
+using SMSXmlToCsv.Exporters;
 
 namespace SMSXmlToCsv;
 
@@ -18,6 +20,9 @@ public class Program
 
     public static void Main(string[] args)
     {
+        // Register encoding provider for legacy code pages (required by MimeKit for international emails)
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+
         // Load configuration
         IConfiguration configuration = new ConfigurationBuilder()
             .SetBasePath(Directory.GetCurrentDirectory())
@@ -239,44 +244,52 @@ public class Program
             AnsiConsole.Write(table);
             AnsiConsole.WriteLine();
 
-            // Ask user if they want to import all or select specific ones
-            string choice = AnsiConsole.Prompt(
-                new SelectionPrompt<string>()
-                    .Title("What would you like to do?")
-                    .AddChoices(new[]
-                    {
-                        "Import All",
-                        "Select Specific Sources",
-                        "Cancel"
-                    }));
+            List<(IDataImporter, string)> toImport;
 
-            if (choice == "Cancel")
+            // If only one source, import it directly
+            if (detectedImporters.Count() == 1)
             {
-                return;
-            }
-
-            List<(IDataImporter, string)> toImport = new List<(IDataImporter, string)>();
-
-            if (choice == "Import All")
-            {
-                toImport.AddRange(detectedImporters);
+                bool confirm = AnsiConsole.Confirm($"Import from [cyan]{detectedImporters.First().Importer.SourceName}[/]?", defaultValue: true);
+                
+                if (!confirm)
+                {
+                    return;
+                }
+                
+                toImport = new List<(IDataImporter, string)> { detectedImporters.First() };
             }
             else
             {
-                // Let user select specific importers
+                // Multiple sources - use multi-select with ALL pre-selected by default
                 List<string> options = detectedImporters
                     .Select(d => $"{d.Importer.SourceName} - {Path.GetFileName(d.SourcePath)}")
                     .ToList();
 
-                List<string> selected = AnsiConsole.Prompt(
-                    new MultiSelectionPrompt<string>()
-                        .Title("Select sources to import:")
-                        .Required()
-                        .AddChoices(options));
+                MultiSelectionPrompt<string> prompt = new MultiSelectionPrompt<string>()
+                    .Title("Select sources to import [dim](use [blue]Space[/] to toggle, [green]Enter[/] to confirm)[/]:")
+                    .Required()
+                    .InstructionsText("[grey](Press [blue]Space[/] to toggle, [green]Enter[/] to accept)[/]")
+                    .AddChoices(options);
+
+                // Pre-select ALL sources by default
+                foreach (string option in options)
+                {
+                    prompt = prompt.Select(option);
+                }
+
+                List<string> selected = AnsiConsole.Prompt(prompt);
 
                 toImport = detectedImporters
                     .Where(d => selected.Contains($"{d.Importer.SourceName} - {Path.GetFileName(d.SourcePath)}"))
                     .ToList();
+            }
+
+            if (toImport.Count == 0)
+            {
+                AnsiConsole.MarkupLine("[yellow]No sources selected. Cancelled.[/]");
+                AnsiConsole.WriteLine("Press any key to continue...");
+                Console.ReadKey();
+                return;
             }
 
             // Import selected sources
@@ -548,11 +561,11 @@ public class Program
             switch (choice)
             {
                 case "Network Graph (All Contacts)":
-                    GenerateNetworkGraph(perContact: false);
+                    GenerateNetworkGraph(perContact: false).Wait();
                     break;
 
                 case "Network Graph (Per Contact)":
-                    GenerateNetworkGraph(perContact: true);
+                    GenerateNetworkGraph(perContact: true).Wait();
                     break;
 
                 case "Back to Main Menu":
@@ -778,10 +791,10 @@ public class Program
         Console.ReadKey();
     }
 
-    private static void GenerateNetworkGraph(bool perContact)
+    private static async Task GenerateNetworkGraph(bool perContact)
     {
         // Smart model selection
-        string? model = SelectOllamaModelAsync("AI topic extraction").Result;
+        string? model = await SelectOllamaModelAsync("AI topic extraction");
         
         if (model == null)
         {
@@ -823,7 +836,7 @@ public class Program
                 string userName = AnsiConsole.Ask("Your name:", "You");
 
                 // Generate per-contact graphs
-                generator.GeneratePerContactGraphsAsync(_importedMessages, outputDirectory, userName).Wait();
+                await generator.GeneratePerContactGraphsAsync(_importedMessages, outputDirectory, userName);
             }
             else
             {
@@ -831,8 +844,8 @@ public class Program
                 
                 string userName = AnsiConsole.Ask("Your name:", "You");
 
-                // Don't wrap in Status here - GenerateGraphAsync has its own Status display
-                generator.GenerateGraphAsync(_importedMessages, outputPath, userName).Wait();
+                // FIXED: Use await instead of .Wait() to avoid deadlock with AnsiConsole.Status()
+                await generator.GenerateGraphAsync(_importedMessages, outputPath, userName);
             }
 
             AnsiConsole.MarkupLine($"[green]✓ Network graph generated successfully![/]");
