@@ -55,7 +55,8 @@ public class OllamaSentimentAnalyzer
         "llama3.2",      // Good balance of speed and accuracy
         "llama3.1",      // Larger, more accurate
         "mistral",       // Fast and efficient
-        "phi3",          // Lightweight, good for sentiment
+        "phi3:medium",          // Lightweight, good for sentiment
+        "phi4",
         "gemma2"         // Google's efficient model
     };
 
@@ -63,7 +64,7 @@ public class OllamaSentimentAnalyzer
     {
         _model = model;
         _baseUrl = baseUrl;
-        _httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
+        _httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
     }
 
     /// <summary>
@@ -103,46 +104,82 @@ public class OllamaSentimentAnalyzer
     /// <summary>
     /// Call Ollama with a custom prompt
     /// </summary>
-    public async Task<string> CallOllamaAsync(string prompt)
+    public async Task<string> CallOllamaAsync(string prompt, int maxRetries = 3)
     {
-        try
+        int attempt = 0;
+        Exception lastException = null;
+
+        while (attempt < maxRetries)
         {
-            object requestBody = new
+            try
             {
-                model = _model,
-                prompt = prompt,
-                stream = false,
-                options = new
+                object requestBody = new
                 {
-                    temperature = 0.3
+                    model = _model,
+                    prompt = prompt,
+                    stream = false,
+                    options = new
+                    {
+                        temperature = 0.3
+                    }
+                };
+
+                string jsonRequest = JsonSerializer.Serialize(requestBody);
+                StringContent content = new StringContent(jsonRequest, Encoding.UTF8, "application/json");
+
+                HttpResponseMessage response = await _httpClient.PostAsync($"{_baseUrl}/api/generate", content);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    throw new Exception($"Ollama API error: {response.StatusCode}");
                 }
-            };
 
-            string jsonRequest = JsonSerializer.Serialize(requestBody);
-            StringContent content = new StringContent(jsonRequest, Encoding.UTF8, "application/json");
+                string jsonResponse = await response.Content.ReadAsStringAsync();
+                using JsonDocument doc = JsonDocument.Parse(jsonResponse);
 
-            HttpResponseMessage response = await _httpClient.PostAsync($"{_baseUrl}/api/generate", content);
+                if (doc.RootElement.TryGetProperty("response", out JsonElement responseElement))
+                {
+                    return responseElement.GetString() ?? "";
+                }
 
-            if (!response.IsSuccessStatusCode)
-            {
-                throw new Exception($"Ollama API error: {response.StatusCode}");
+                return "";
             }
-
-            string jsonResponse = await response.Content.ReadAsStringAsync();
-            using JsonDocument doc = JsonDocument.Parse(jsonResponse);
-
-            if (doc.RootElement.TryGetProperty("response", out JsonElement responseElement))
+            catch (TaskCanceledException ex)
             {
-                return responseElement.GetString() ?? "";
+                // Timeout - retry with exponential backoff
+                attempt++;
+                lastException = ex;
+                if (attempt < maxRetries)
+                {
+                    int delayMs = (int)Math.Pow(2, attempt) * 1000; // 2s, 4s, 8s
+                    Log.Warning("Ollama timeout on attempt {Attempt}/{MaxRetries}, retrying in {Delay}ms", attempt, maxRetries, delayMs);
+                    await Task.Delay(delayMs);
+                }
             }
+            catch (HttpRequestException ex)
+            {
+                // Network error - retry
+                attempt++;
+                lastException = ex;
+                if (attempt < maxRetries)
+                {
+                    int delayMs = (int)Math.Pow(2, attempt) * 1000;
+                    Log.Warning("Ollama network error on attempt {Attempt}/{MaxRetries}, retrying in {Delay}ms: {Error}",
+                        attempt, maxRetries, delayMs, ex.Message);
+                    await Task.Delay(delayMs);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Other errors - don't retry
+                Log.Error(ex, "Error calling Ollama (non-retryable)");
+                throw;
+            }
+        }
 
-            return "";
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Error calling Ollama");
-            throw;
-        }
+        // All retries exhausted
+        Log.Error(lastException, "Ollama call failed after {MaxRetries} attempts", maxRetries);
+        throw lastException ?? new Exception("Ollama call failed");
     }
 
     /// <summary>
@@ -238,9 +275,19 @@ public class OllamaSentimentAnalyzer
     }
 
     /// <summary>
-    /// Analyze sentiment of a message with extended categories
+    /// Internal helper to send a sentiment prompt with retry using existing CallOllamaAsync logic.
     /// </summary>
-    public async Task<SentimentResult> AnalyzeSentimentAsync(string text)
+    private async Task<string> SendSentimentPromptWithRetryAsync(string text, int maxRetries = 3)
+    {
+        string prompt = BuildSentimentPrompt(text);
+        // Reuse CallOllamaAsync so we keep its retry/backoff behavior
+        return await CallOllamaAsync(prompt, maxRetries);
+    }
+
+    /// <summary>
+    /// Analyze sentiment of a message with extended categories (uses retry logic).
+    /// </summary>
+    public async Task<SentimentResult> AnalyzeSentimentAsync(string text, int maxRetries = 3)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
@@ -254,49 +301,17 @@ public class OllamaSentimentAnalyzer
 
         try
         {
-            string prompt = BuildSentimentPrompt(text);
-
-            object requestBody = new
-            {
-                model = _model,
-                prompt = prompt,
-                stream = false,
-                options = new
-                {
-                    temperature = 0.1  // Low temperature for more consistent results
-                }
-            };
-
-            string jsonRequest = JsonSerializer.Serialize(requestBody);
-            StringContent content = new StringContent(jsonRequest, Encoding.UTF8, "application/json");
-
-            HttpResponseMessage response = await _httpClient.PostAsync($"{_baseUrl}/api/generate", content);
-
-            if (!response.IsSuccessStatusCode)
+            string aiResponse = await SendSentimentPromptWithRetryAsync(text, maxRetries);
+            if (string.IsNullOrWhiteSpace(aiResponse))
             {
                 return new SentimentResult
                 {
                     PrimarySentiment = ExtendedSentiment.Neutral,
                     Confidence = 0.0,
-                    Error = $"API error: {response.StatusCode}"
+                    Error = "Empty response"
                 };
             }
-
-            string jsonResponse = await response.Content.ReadAsStringAsync();
-            using JsonDocument doc = JsonDocument.Parse(jsonResponse);
-
-            if (doc.RootElement.TryGetProperty("response", out JsonElement responseElement))
-            {
-                string aiResponse = responseElement.GetString() ?? "";
-                return ParseSentimentResponse(aiResponse);
-            }
-
-            return new SentimentResult
-            {
-                PrimarySentiment = ExtendedSentiment.Neutral,
-                Confidence = 0.0,
-                Error = "No response from model"
-            };
+            return ParseSentimentResponse(aiResponse);
         }
         catch (Exception ex)
         {
@@ -308,6 +323,63 @@ public class OllamaSentimentAnalyzer
                 Error = ex.Message
             };
         }
+    }
+
+    /// <summary>
+    /// Concurrent batch sentiment analysis with bounded parallelism (up to CPU core count).
+    /// Preserves input order in results.
+    /// </summary>
+    public async Task<IReadOnlyList<SentimentResult>> AnalyzeSentimentsConcurrentAsync(
+        IEnumerable<string> texts,
+        int? maxDegreeOfParallelism = null,
+        int maxRetries = 3,
+        IProgress<(int completed, int total)>? progress = null)
+    {
+        var list = texts.ToList();
+        int total = list.Count;
+        List<SentimentResult> results = new(total);
+        // Pre-size with placeholders to preserve ordering
+        for (int i = 0; i < total; i++) results.Add(new SentimentResult { PrimarySentiment = ExtendedSentiment.Neutral, Confidence = 0, Error = "Pending" });
+
+        int degree = maxDegreeOfParallelism.HasValue
+            ? Math.Max(1, Math.Min(Environment.ProcessorCount, maxDegreeOfParallelism.Value))
+            : Environment.ProcessorCount;
+
+        SemaphoreSlim gate = new(degree, degree);
+        int completed = 0;
+        List<Task> running = new();
+
+        for (int index = 0; index < total; index++)
+        {
+            int capture = index;
+            await gate.WaitAsync();
+            var task = Task.Run(async () =>
+            {
+                try
+                {
+                    results[capture] = await AnalyzeSentimentAsync(list[capture], maxRetries);
+                }
+                catch (Exception ex)
+                {
+                    results[capture] = new SentimentResult
+                    {
+                        PrimarySentiment = ExtendedSentiment.Neutral,
+                        Confidence = 0.0,
+                        Error = ex.Message
+                    };
+                }
+                finally
+                {
+                    int done = Interlocked.Increment(ref completed);
+                    progress?.Report((done, total));
+                    gate.Release();
+                }
+            });
+            running.Add(task);
+        }
+
+        await Task.WhenAll(running);
+        return results;
     }
 
     private string BuildSentimentPrompt(string text)
