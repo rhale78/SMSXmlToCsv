@@ -15,6 +15,7 @@ A comprehensive .NET 9 console application for importing, consolidating, and exp
 
 ### 📥 Supported Import Sources
 
+- **Auto-Detect** - Scans a directory and automatically identifies compatible data sources
 - **Android SMS Backup & Restore** - XML format (SMS and MMS)
 - **Facebook Messenger** - JSON data export
 - **Instagram Messages** - JSON data export
@@ -28,6 +29,7 @@ A comprehensive .NET 9 console application for importing, consolidating, and exp
 - **JSONL** - JSON Lines format for efficient processing
 - **HTML** - Beautiful chat-like interface with styling
 - **Parquet** - Columnar format optimized for big data analytics
+- **SQLite** - Embedded relational database for querying and integration
 
 ### 🎯 Export Strategies
 
@@ -62,12 +64,18 @@ The application includes advanced AI-powered conversation analysis and network g
 
 ### 📊 Analysis & Reports
 
-- **Thread Analysis**: Detect conversation threads with configurable timeout
-- **Response Time Analysis**: Calculate average, median, min, and max response times
-- **Advanced Statistics**: Comprehensive message statistics and analytics
+- **Thread Analysis**: Detect conversation threads with configurable timeout; export results to JSON
+- **Response Time Analysis**: Calculate average, median, min, and max response times; export to JSON
+- **Advanced Statistics**: Comprehensive message statistics and analytics; export to JSON or Markdown
 - **Sentiment Analysis**: AI-powered sentiment detection (requires Ollama)
 - **Message Search**: Interactive search through imported messages
 - **PDF Reports**: Generate comprehensive PDF reports with statistics
+
+### 🔧 Advanced Tools
+
+- **Contact Merge**: Automatically detect and interactively merge duplicate contacts by name similarity
+- **Contact Filter**: Interactively select a subset of contacts to keep in the loaded message set
+- **Date Range Filter**: Filter loaded messages to a specific start and/or end date
 
 ## Project Structure
 
@@ -79,9 +87,34 @@ SMSXmlToCsv/
 ├── src/
 │   └── SMSXmlToCsv/
 │       ├── Exporters/            # Data export implementations
+│       │   ├── CsvExporter.cs
+│       │   ├── HtmlExporter.cs
+│       │   ├── JsonlExporter.cs
+│       │   ├── ParquetExporter.cs
+│       │   └── SqliteExporter.cs
 │       ├── Importers/            # Data import implementations
+│       │   ├── SmsXmlImporter.cs
+│       │   ├── FacebookMessageImporter.cs
+│       │   ├── InstagramMessageImporter.cs
+│       │   ├── GoogleTakeoutImporter.cs
+│       │   ├── GoogleMailImporter.cs
+│       │   └── SignalBackupImporter.cs
 │       ├── Models/               # Core data models
 │       ├── Services/             # Business logic and services
+│       │   ├── Analysis/         # Thread, response time, statistics
+│       │   ├── CLI/              # Command-line option parsing
+│       │   ├── ErrorHandling/    # Error collection and reporting
+│       │   ├── Filtering/        # Date range and email filters
+│       │   ├── ML/               # AI/Ollama integration and caching
+│       │   ├── Reports/          # PDF report generation
+│       │   ├── Search/           # Interactive message search
+│       │   ├── Visualization/    # Network graph generation
+│       │   ├── ContactFilterService.cs
+│       │   ├── ContactMergeService.cs
+│       │   ├── ExportOrchestrator.cs
+│       │   ├── ExportPathBuilder.cs
+│       │   ├── ImporterDetectionService.cs
+│       │   └── UserIdentityStore.cs
 │       ├── Program.cs            # Application entry point
 │       └── appsettings.json      # Configuration file
 ├── old/                          # Legacy code archive (v0.7-1.7)
@@ -136,6 +169,30 @@ The application is configured via `appsettings.json`:
     "ExcludedDirectories": [".git", ".github", "bin", "obj", ...],
     "ExcludedFiles": ["*.tmp", "*.cache", "*.log"]
   },
+  "ErrorHandling": {
+    "ContinueOnError": false,
+    "SaveErrorReport": true,
+    "ErrorReportPath": "./logs/error-report-{datetime}.txt"
+  },
+  "DateFiltering": {
+    "Enabled": false,
+    "StartDate": null,
+    "EndDate": null
+  },
+  "EmailFiltering": {
+    "FilterBusinessEmails": true,
+    "RemoveDuplicates": true,
+    "KeepOnlyPersonalEmails": true
+  },
+  "ThreadAnalysis": {
+    "Enabled": false,
+    "ThreadTimeoutMinutes": 30
+  },
+  "NetworkGraph": {
+    "Enabled": false,
+    "MinimumMessageThreshold": 5,
+    "OutputPath": "./output/network-graph.html"
+  },
   "Serilog": {
     "MinimumLevel": "Information",
     ...
@@ -150,6 +207,52 @@ The application is configured via `appsettings.json`:
 - `{datetime}` - Combined date and time
 - `{project}` - Project name
 - `{contact_name}` - Contact name (for per-contact exports)
+
+### Command-Line Interface
+
+The application supports both **interactive** (default) and **non-interactive** modes.
+
+```
+USAGE:
+  SMSXmlToCsv [OPTIONS]
+  SMSXmlToCsv          (no arguments launches interactive mode)
+
+OPTIONS:
+  -h, --help                    Show help message
+  -v, --version                 Show version information
+  -i, --input <file>            Input file path
+  -o, --output <directory>      Output directory path
+  -f, --formats <formats>       Export formats (comma-separated)
+                                Values: csv, jsonl, html, parquet, sqlite
+  --start-date <date>           Filter messages from this date (yyyy-MM-dd)
+  --end-date <date>             Filter messages to this date (yyyy-MM-dd)
+  -c, --contacts <contacts>     Filter by specific contacts (comma-separated)
+  --continue-on-error           Continue processing on errors
+  --save-error-report           Save error report to file
+  --thread-analysis             Enable conversation thread analysis
+  --response-time               Enable response time analysis
+  --statistics, --stats         Generate advanced statistics
+  --interactive                 Force interactive mode
+```
+
+#### CLI Examples
+
+```bash
+# Export to CSV
+SMSXmlToCsv --input backup.xml --output ./exports --formats csv
+
+# Export to multiple formats
+SMSXmlToCsv --input backup.xml --output ./exports --formats csv,html,parquet
+
+# Filter by date range
+SMSXmlToCsv --input backup.xml --start-date 2024-01-01 --end-date 2024-12-31
+
+# Export specific contacts with analysis
+SMSXmlToCsv --input backup.xml --contacts "John,Jane" --thread-analysis --stats
+
+# Interactive mode (default when no arguments are provided)
+SMSXmlToCsv
+```
 
 ### AI Features Setup (Optional)
 
@@ -246,9 +349,12 @@ This project follows strict coding standards:
 - **Serilog** - Structured logging
 - **CsvHelper** - CSV serialization
 - **Parquet.Net** - Parquet file format
+- **Microsoft.Data.Sqlite** - SQLite database export
+- **QuestPDF** - PDF report generation
 - **MimeKit** - Email parsing
 - **HtmlAgilityPack** - HTML parsing
 - **Microsoft.Extensions.Configuration** - Configuration management
+- **System.Text.Encoding.CodePages** - Legacy encoding support for international email parsing
 
 ## Recent Improvements
 
