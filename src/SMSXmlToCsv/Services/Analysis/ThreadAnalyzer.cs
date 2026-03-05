@@ -143,14 +143,22 @@ public class ThreadAnalyzer
 
     private string GetContactKey(Message message)
     {
-        if (!string.IsNullOrEmpty(message.From?.Name))
+        // For sent messages, the conversation partner is in 'To'
+        // For received messages, the conversation partner is in 'From'
+        // This ensures all messages in a conversation are grouped together.
+        if (message.Direction == MessageDirection.Sent)
         {
-            return message.From.Name;
+            if (!string.IsNullOrEmpty(message.To?.Name))
+                return message.To.Name;
+            if (!string.IsNullOrEmpty(message.From?.Name))
+                return message.From.Name;
         }
-
-        if (!string.IsNullOrEmpty(message.To?.Name))
+        else
         {
-            return message.To.Name;
+            if (!string.IsNullOrEmpty(message.From?.Name))
+                return message.From.Name;
+            if (!string.IsNullOrEmpty(message.To?.Name))
+                return message.To.Name;
         }
 
         return "Unknown";
