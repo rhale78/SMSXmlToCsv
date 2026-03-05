@@ -41,6 +41,24 @@ public class NetworkGraphOptions
     /// Skip contacts with "Unknown" as contact name
     /// </summary>
     public bool SkipUnknownContacts { get; set; } = true;
+    
+    /// <summary>
+    /// Minimum number of messages required for topic extraction per contact
+    /// Set to -1 to disable minimum (process all contacts)
+    /// </summary>
+    public int MinMessagesPerContact { get; set; } = -1;  // Changed to -1 to show all topics
+    
+    /// <summary>
+    /// Minimum message count for a topic to be included in the graph
+    /// Set to -1 to disable minimum (include all topics)
+    /// </summary>
+    public int MinTopicMessageCount { get; set; } = -1;  // -1 = no minimum, include all
+    
+    /// <summary>
+    /// Maximum number of topics to include per contact
+    /// Set to -1 for unlimited topics
+    /// </summary>
+    public int MaxTopicsPerContact { get; set; } = -1;  // -1 = unlimited
 }
 
 /// <summary>
@@ -49,10 +67,20 @@ public class NetworkGraphOptions
 public class TopicItem
 {
     public string Name { get; set; } = string.Empty;
-    public string Type { get; set; } = "topic";  // "topic", "person", "date", "event", "promise", "relationship"
+    public string Type { get; set; } = "topic";  // "topic", "person", "company", "place", "date", "event", "promise", "relationship"
     public List<TopicItem>? SubTopics { get; set; }  // Hierarchical subtopics
     public int MessageCount { get; set; }  // Number of messages mentioning this topic
     public string? Context { get; set; }  // Additional context (e.g., for dates: "Birthday celebration")
+}
+
+/// <summary>
+/// Topic with parent relationship for hierarchical visualization
+/// </summary>
+public class TopicWithParent
+{
+    public string TopicString { get; set; } = string.Empty;
+    public string? ParentTopicName { get; set; }  // Name of parent topic (for creating links later)
+    public string CleanName { get; set; } = string.Empty;  // Clean name without prefixes
 }
 
 /// <summary>
@@ -63,9 +91,9 @@ public class GraphNode
     public string Id { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public int MessageCount { get; set; }
-    public int Group { get; set; }  // 0 = user, 1 = contact, 2 = topic, 3 = person mentioned, 4 = date/event, 5 = promise
+    public int Group { get; set; }  // 0 = user, 1 = contact, 2 = topic, 3 = person mentioned, 4 = date/event, 5 = promise, 6 = company, 7 = place, 8 = subtopic
     public List<string> TopTopics { get; set; } = new List<string>();
-    public string? EntityType { get; set; }  // For named entities: "person", "date", "event", "promise", "relationship"
+    public string? EntityType { get; set; }  // For named entities: "person", "company", "place", "date", "event", "promise", "relationship", "subtopic"
     public string? ParentTopic { get; set; }  // For subtopics, reference to parent topic ID
 }
 
@@ -85,15 +113,19 @@ public class GraphLink
 /// </summary>
 public class NetworkGraphGenerator
 {
-    private const bool UNLIMITED_TOPICS_MODE = true;  // From legacy - works well
-    private const int MIN_TOPIC_MESSAGES = 2;  // From legacy
     private readonly OllamaSentimentAnalyzer _ollamaAnalyzer;
     private readonly NetworkGraphOptions _options;
+    private readonly AiResponseCache _cache;
+    
+    // Track parent-child relationships for subtopics
+    // Key: topic string (with prefix and count), Value: parent topic clean name
+    private readonly Dictionary<string, string> _topicParents = new Dictionary<string, string>();
 
     public NetworkGraphGenerator(OllamaSentimentAnalyzer ollamaAnalyzer, NetworkGraphOptions? options = null)
     {
         _ollamaAnalyzer = ollamaAnalyzer ?? throw new ArgumentNullException(nameof(ollamaAnalyzer));
         _options = options ?? new NetworkGraphOptions();
+        _cache = new AiResponseCache();
     }
 
     /// <summary>
@@ -104,10 +136,44 @@ public class NetworkGraphGenerator
         Log.Information("Generating network graph with AI topic detection (legacy algorithm)");
         System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Starting generation - Output: {outputPath}, User: {userName}");
 
+        // Clear parent relationships from previous runs
+        _topicParents.Clear();
+
+        // Load cache from disk
+        await _cache.LoadAsync();
+        var cacheStats = _cache.GetStatistics();
+        if (cacheStats.totalEntries > 0)
+        {
+            Log.Information("Loaded AI cache with {Count} entries (oldest: {Oldest}, newest: {Newest})", 
+                cacheStats.totalEntries, cacheStats.oldestEntry, cacheStats.newestEntry);
+            System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Cache loaded: {cacheStats.totalEntries} entries");
+            
+            // Prompt user to clear cache (with red warning)
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine($"[yellow]Found existing AI response cache with {cacheStats.totalEntries} entries[/]");
+            AnsiConsole.MarkupLine($"[dim]Oldest entry: {cacheStats.oldestEntry}, Newest: {cacheStats.newestEntry}[/]");
+            
+            bool clearCache = AnsiConsole.Confirm(
+                "[red]Clear cache and reprocess all messages?[/] [dim](This will require re-running AI analysis for all contacts)[/]", 
+                defaultValue: false);
+            
+            if (clearCache)
+            {
+                _cache.Clear();
+                AnsiConsole.MarkupLine("[yellow]✓ Cache cleared - all messages will be reprocessed[/]");
+                Log.Information("User cleared AI cache - will reprocess all messages");
+            }
+            else
+            {
+                AnsiConsole.MarkupLine("[green]✓ Using cached responses - only new/changed messages will be processed[/]");
+            }
+            AnsiConsole.WriteLine();
+        }
+
         if (!await _ollamaAnalyzer.IsAvailableAsync())
         {
             System.Diagnostics.Debug.WriteLine("[NET GRAPH] ERROR: Ollama not available");
-            throw new InvalidOperationException("Ollama is not available. Install from: https://ollama.ai and run: ollama pull llama3.2");
+            throw new InvalidOperationException("Ollama is not available. Install from: https://ollima.ai and run: Ollama pull llama3.2");
         }
 
         List<Message> messageList = messages.ToList();
@@ -142,16 +208,23 @@ public class NetworkGraphGenerator
         // Extract contacts and their messages (both sides if enabled)
         foreach (Message message in messageList)
         {
-            string contactName = ExtractContactName(message, userName);
-            string contactPhone = ExtractContactPhone(message, userName);
+            // Use message's virtual methods for validation and extraction
+            if (!message.IsValid())
+            {
+                continue; // Skip invalid messages
+            }
+
+            string contactName = message.GetContactName(message.Direction);
+            string contactPhone = message.GetContactIdentifier(message.Direction);
 
             if (string.IsNullOrEmpty(contactPhone) || contactPhone == "Unknown")
             {
                 continue; // Skip invalid contacts
             }
 
-            // Skip contacts with "Unknown" name if option is enabled
-            if (_options.SkipUnknownContacts && contactName.Equals("Unknown", StringComparison.OrdinalIgnoreCase))
+            // Skip contacts with "Unknown" or "(Unknown)" name if option is enabled
+            if (_options.SkipUnknownContacts && (contactName.Equals("Unknown", StringComparison.OrdinalIgnoreCase) || 
+                                                 contactName.Equals("(Unknown)", StringComparison.OrdinalIgnoreCase)))
             {
                 System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Skipping unknown contact: {contactPhone}");
                 continue;
@@ -272,7 +345,7 @@ public class NetworkGraphGenerator
         int processed = 0;
         int totalContacts = contactMessages.Count;
         List<(string ContactName, int TopicCount)> topicResults = new List<(string, int)>();
-        List<(string ContactName, string TopicsPreview)> topicDetails = new List<(string, string)>();
+        List<(string ContactName, List<string> AllTopics)> allContactTopics = new List<(string, List<string>)>();
         List<string> emptyResponseContacts = new List<string>();
         List<(string ContactName, string Error)> errorContacts = new List<(string, string)>();
 
@@ -288,7 +361,8 @@ public class NetworkGraphGenerator
                     string contactPhone = contactKvp.Key;
                     List<string> msgTexts = contactKvp.Value;
 
-                    if (msgTexts.Count < MIN_TOPIC_MESSAGES)
+                    // Check minimum messages per contact (-1 means no minimum)
+                    if (_options.MinMessagesPerContact >= 0 && msgTexts.Count < _options.MinMessagesPerContact)
                     {
                         continue;
                     }
@@ -309,41 +383,35 @@ public class NetworkGraphGenerator
                             // Store for logging later (outside Status context)
                             topicResults.Add((nodes[contactPhone].Name, contactTopics.Count));
                             
-                            // Store topics summary for detailed logging
-                            string topicsPreview = string.Join(", ", contactTopics.Take(5));
-                            if (contactTopics.Count > 5)
-                            {
-                                topicsPreview += $" (and {contactTopics.Count - 5} more)";
-                            }
-                            topicDetails.Add((nodes[contactPhone].Name, topicsPreview));
+                            // Store ALL topics for detailed logging
+                            allContactTopics.Add((nodes[contactPhone].Name, contactTopics.ToList()));
 
-                            nodes[contactPhone].TopTopics = UNLIMITED_TOPICS_MODE
+                            // Apply max topics limit if configured (-1 means unlimited)
+                            nodes[contactPhone].TopTopics = (_options.MaxTopicsPerContact < 0)
                                 ? contactTopics.ToList()
-                                : contactTopics.Take(10).ToList();
+                                : contactTopics.Take(_options.MaxTopicsPerContact).ToList();
 
                             foreach (string topic in contactTopics)
                             {
-                                // Count messages containing this topic
-                                int topicMessageCount = msgTexts.Count(m => m.IndexOf(topic, StringComparison.OrdinalIgnoreCase) >= 0);
+                                // Extract message count from topic string (format: "name:count" or "prefix:name:count")
+                                int topicMessageCount = ExtractMessageCount(topic, msgTexts);
 
-                                if (topicMessageCount == 0)
+                                // Get clean topic name without count suffix
+                                string cleanTopic = RemoveMessageCount(topic);
+
+                                if (!topicToContacts.ContainsKey(cleanTopic))
                                 {
-                                    topicMessageCount = Math.Max(1, msgTexts.Count / Math.Max(contactTopics.Count, 1));
+                                    topicToContacts[cleanTopic] = new HashSet<string>();
+                                    globalTopicFrequency[cleanTopic] = 0;
                                 }
 
-                                if (!topicToContacts.ContainsKey(topic))
+                                topicToContacts[cleanTopic].Add(contactPhone);
+                                if (!contactTopicMessageCounts[contactPhone].ContainsKey(cleanTopic))
                                 {
-                                    topicToContacts[topic] = new HashSet<string>();
-                                    globalTopicFrequency[topic] = 0;
+                                    contactTopicMessageCounts[contactPhone][cleanTopic] = 0;
                                 }
-
-                                topicToContacts[topic].Add(contactPhone);
-                                if (!contactTopicMessageCounts[contactPhone].ContainsKey(topic))
-                                {
-                                    contactTopicMessageCounts[contactPhone][topic] = 0;
-                                }
-                                contactTopicMessageCounts[contactPhone][topic] += topicMessageCount;
-                                globalTopicFrequency[topic] += topicMessageCount;
+                                contactTopicMessageCounts[contactPhone][cleanTopic] += topicMessageCount;
+                                globalTopicFrequency[cleanTopic] += topicMessageCount;
                             }
                         }
                         else
@@ -367,7 +435,8 @@ public class NetworkGraphGenerator
                         string contactPhone = userKvp.Key;
                         List<string> msgTexts = userKvp.Value;
 
-                        if (msgTexts.Count < MIN_TOPIC_MESSAGES)
+                        // Check minimum messages per contact (-1 means no minimum)
+                        if (_options.MinMessagesPerContact >= 0 && msgTexts.Count < _options.MinMessagesPerContact)
                         {
                             continue;
                         }
@@ -383,26 +452,25 @@ public class NetworkGraphGenerator
                             {
                                 foreach (string topic in userTopics)
                                 {
-                                    int topicMessageCount = msgTexts.Count(m => m.IndexOf(topic, StringComparison.OrdinalIgnoreCase) >= 0);
+                                    // Extract message count from topic string
+                                    int topicMessageCount = ExtractMessageCount(topic, msgTexts);
 
-                                    if (topicMessageCount == 0)
+                                    // Get clean topic name without count suffix
+                                    string cleanTopic = RemoveMessageCount(topic);
+
+                                    if (!topicToContacts.ContainsKey(cleanTopic))
                                     {
-                                        topicMessageCount = Math.Max(1, msgTexts.Count / Math.Max(userTopics.Count, 1));
+                                        topicToContacts[cleanTopic] = new HashSet<string>();
+                                        globalTopicFrequency[cleanTopic] = 0;
                                     }
 
-                                    if (!topicToContacts.ContainsKey(topic))
+                                    topicToContacts[cleanTopic].Add("user");
+                                    if (!userTopicMessageCounts.ContainsKey(cleanTopic))
                                     {
-                                        topicToContacts[topic] = new HashSet<string>();
-                                        globalTopicFrequency[topic] = 0;
+                                        userTopicMessageCounts[cleanTopic] = 0;
                                     }
-
-                                    topicToContacts[topic].Add("user");
-                                    if (!userTopicMessageCounts.ContainsKey(topic))
-                                    {
-                                        userTopicMessageCounts[topic] = 0;
-                                    }
-                                    userTopicMessageCounts[topic] += topicMessageCount;
-                                    globalTopicFrequency[topic] += topicMessageCount;
+                                    userTopicMessageCounts[cleanTopic] += topicMessageCount;
+                                    globalTopicFrequency[cleanTopic] += topicMessageCount;
                                 }
                             }
                         }
@@ -429,11 +497,12 @@ public class NetworkGraphGenerator
             System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Contact '{contactName}': Found {topicCount} topics");
         }
         
-        // Log detailed topics for debugging
-        foreach ((string contactName, string topicsPreview) in topicDetails)
+        // Log ALL topics for each contact (not just a preview)
+        foreach ((string contactName, List<string> topics) in allContactTopics)
         {
-            Log.Debug("Topics for {ContactName}: {Topics}", contactName, topicsPreview);
-            System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Topics for '{contactName}': {topicsPreview}");
+            string allTopicsStr = string.Join(", ", topics);
+            Log.Information("All topics for {ContactName}: {Topics}", contactName, allTopicsStr);
+            System.Diagnostics.Debug.WriteLine($"[NET GRAPH] All topics for '{contactName}': {allTopicsStr}");
         }
 
         // Log warnings for empty responses
@@ -465,20 +534,31 @@ public class NetworkGraphGenerator
             AnsiConsole.MarkupLine($"[red]! Encountered errors for {errorContacts.Count} contacts see logs for details[/]");
         }
 
-        // Filter and create topic nodes (from legacy)
-        List<KeyValuePair<string, HashSet<string>>> validTopics = UNLIMITED_TOPICS_MODE
-            ? topicToContacts
-                .Where(kvp => globalTopicFrequency[kvp.Key] >= MIN_TOPIC_MESSAGES)
-                .OrderByDescending(kvp => globalTopicFrequency[kvp.Key])
-                .ToList()
-            : topicToContacts
+        // Filter and create topic nodes based on configured limits
+        List<KeyValuePair<string, HashSet<string>>> validTopics;
+        if (_options.MinTopicMessageCount < 0)
+        {
+            // No minimum - include all topics
+            validTopics = topicToContacts
                 .Where(kvp => globalTopicFrequency[kvp.Key] > 0)
                 .OrderByDescending(kvp => globalTopicFrequency[kvp.Key])
                 .ToList();
+        }
+        else
+        {
+            // Apply minimum topic message count
+            validTopics = topicToContacts
+                .Where(kvp => globalTopicFrequency[kvp.Key] >= _options.MinTopicMessageCount)
+                .OrderByDescending(kvp => globalTopicFrequency[kvp.Key])
+                .ToList();
+        }
 
         Log.Information("Creating {TopicCount} topic nodes", validTopics.Count);
 
         int topicNodeId = 1;
+        Dictionary<string, string> topicNameToNodeId = new Dictionary<string, string>();  // Map topic clean names to node IDs
+        
+        // First pass: Create all nodes and map names to IDs
         foreach (KeyValuePair<string, HashSet<string>> kvp in validTopics)
         {
             string topic = kvp.Key;
@@ -495,25 +575,88 @@ public class NetworkGraphGenerator
                 MessageCount = globalTopicFrequency[topic],
                 Group = groupType
             };
-
-            // Create links from contacts/user to topics
-            foreach (string contactPhone in contactsDiscussingTopic)
+            
+            // Extract clean name for parent lookup
+            string cleanTopicName = RemoveMessageCount(topic);
+            if (cleanTopicName.Contains(':'))
             {
-                // Skip user-to-topic links if option is disabled
-                if (contactPhone == "user" && !_options.IncludeUserLinks)
-                {
-                    continue;
-                }
+                cleanTopicName = cleanTopicName.Substring(cleanTopicName.LastIndexOf(':') + 1).Trim();
+            }
+            topicNameToNodeId[cleanTopicName] = topicNodeIdStr;
+        }
+        
+        // Second pass: Create links
+        foreach (KeyValuePair<string, HashSet<string>> kvp in validTopics)
+        {
+            string topic = kvp.Key;
+            HashSet<string> contactsDiscussingTopic = kvp.Value;
+            
+            // Parse entity type and name from prefixed topics
+            (int groupType, string displayName) = ParseEntityType(topic);
+            
+            // Extract clean name for lookup
+            string cleanTopicName = RemoveMessageCount(topic);
+            if (cleanTopicName.Contains(':'))
+            {
+                cleanTopicName = cleanTopicName.Substring(cleanTopicName.LastIndexOf(':') + 1).Trim();
+            }
+            
+            string topicNodeIdStr = topicNameToNodeId[cleanTopicName];
 
-                if (contactTopicMessageCounts.ContainsKey(contactPhone) &&
-                    contactTopicMessageCounts[contactPhone].ContainsKey(topic))
+            // Check if this topic is a subtopic (has a parent)
+            bool isSubtopic = _topicParents.ContainsKey(topic);
+            
+            if (isSubtopic)
+            {
+                // This is a subtopic - create link to parent topic
+                string parentTopicName = _topicParents[topic];
+                System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Creating subtopic link: {displayName} -> parent: {parentTopicName}");
+                
+                // Find parent node ID
+                if (topicNameToNodeId.ContainsKey(parentTopicName))
                 {
+                    string parentNodeId = topicNameToNodeId[parentTopicName];
                     links.Add(new GraphLink
                     {
-                        Source = contactPhone,
+                        Source = parentNodeId,
                         Target = topicNodeIdStr,
-                        Value = contactTopicMessageCounts[contactPhone][topic]
+                        Value = globalTopicFrequency[topic]
                     });
+                    System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Linked subtopic '{displayName}' to parent node {parentNodeId}");
+                }
+                else
+                {
+                    // Parent not found - log warning but still create contact links
+                    Log.Warning("Parent topic '{ParentName}' not found for subtopic '{SubtopicName}'", 
+                        parentTopicName, displayName);
+                    System.Diagnostics.Debug.WriteLine($"[NET GRAPH] WARNING: Parent '{parentTopicName}' not found for subtopic '{displayName}', linking to contacts instead");
+                    
+                    // Fall through to create contact links as fallback
+                    isSubtopic = false;
+                }
+            }
+            
+            // For non-subtopics OR if parent not found, create links from contacts/user
+            if (!isSubtopic)
+            {
+                foreach (string contactPhone in contactsDiscussingTopic)
+                {
+                    // Skip user-to-topic links if option is disabled
+                    if (contactPhone == "user" && !_options.IncludeUserLinks)
+                    {
+                        continue;
+                    }
+
+                    if (contactTopicMessageCounts.ContainsKey(contactPhone) &&
+                        contactTopicMessageCounts[contactPhone].ContainsKey(topic))
+                    {
+                        links.Add(new GraphLink
+                        {
+                            Source = contactPhone,
+                            Target = topicNodeIdStr,
+                            Value = contactTopicMessageCounts[contactPhone][topic]
+                        });
+                    }
                 }
             }
         }
@@ -527,6 +670,10 @@ public class NetworkGraphGenerator
         Log.Information("Network graph stats - Total Nodes: {TotalNodes} (User: 1, Contacts: {Contacts}, Topics: {Topics}), Links: {Links}", 
             nodes.Count, contactNodes, topicNodes, links.Count);
         System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Final graph - Nodes: {nodes.Count} (User: 1, Contacts: {contactNodes}, Topics: {topicNodes}), Links: {links.Count}");
+
+        // Save cache to disk
+        await _cache.SaveAsync();
+        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Cache saved with {_cache.GetStatistics().totalEntries} entries");
 
         // Generate HTML
         await GenerateHtmlAsync(nodes.Values.ToList(), links, outputPath);
@@ -561,16 +708,22 @@ public class NetworkGraphGenerator
         
         foreach (Message message in messageList)
         {
-            string contactName = ExtractContactName(message, userName);
-            string contactPhone = ExtractContactPhone(message, userName);
+            if (!message.IsValid())
+            {
+                continue;
+            }
+
+            string contactName = message.GetContactName(message.Direction);
+            string contactPhone = message.GetContactIdentifier(message.Direction);
 
             if (string.IsNullOrEmpty(contactPhone) || contactPhone == "Unknown")
             {
                 continue;
             }
 
-            // Skip contacts with "Unknown" name if option is enabled
-            if (_options.SkipUnknownContacts && contactName.Equals("Unknown", StringComparison.OrdinalIgnoreCase))
+            // Skip contacts with "Unknown" or "(Unknown)" name if option is enabled
+            if (_options.SkipUnknownContacts && (contactName.Equals("Unknown", StringComparison.OrdinalIgnoreCase) ||
+                                                 contactName.Equals("(Unknown)", StringComparison.OrdinalIgnoreCase)))
             {
                 continue;
             }
@@ -595,8 +748,8 @@ public class NetworkGraphGenerator
             string contactKey = kvp.Key;
             List<Message> contactMessages = kvp.Value;
             
-            // Skip contacts with too few messages
-            if (contactMessages.Count < MIN_TOPIC_MESSAGES)
+            // Skip contacts with too few messages if minimum is configured
+            if (_options.MinMessagesPerContact >= 0 && contactMessages.Count < _options.MinMessagesPerContact)
             {
                 skippedCount++;
                 continue;
@@ -630,59 +783,42 @@ public class NetworkGraphGenerator
         AnsiConsole.MarkupLine($"[green]✓ Generated {processedCount} network graphs[/]");
         if (skippedCount > 0)
         {
-            AnsiConsole.MarkupLine($"[yellow]! Skipped {skippedCount} contacts with insufficient messages (< {MIN_TOPIC_MESSAGES})[/]");
+            string minMsg = _options.MinMessagesPerContact < 0 ? "N/A" : _options.MinMessagesPerContact.ToString();
+            AnsiConsole.MarkupLine($"[yellow]! Skipped {skippedCount} contacts with insufficient messages (< {minMsg})[/]");
         }
         Log.Information("Per-contact network graphs completed: {ProcessedCount} generated, {SkippedCount} skipped", 
             processedCount, skippedCount);
     }
 
     /// <summary>
-    /// Extract contact name from Message (fixed version)
-    /// </summary>
-    private string ExtractContactName(Message message, string userName)
-    {
-        // Determine the contact (the person who is NOT the user)
-        if (message.Direction == MessageDirection.Sent)
-        {
-            // Sent message - contact is the recipient
-            return !string.IsNullOrEmpty(message.To?.Name) ? message.To.Name : "Unknown";
-        }
-        else
-        {
-            // Received message - contact is the sender
-            return !string.IsNullOrEmpty(message.From?.Name) ? message.From.Name : "Unknown";
-        }
-    }
-
-    /// <summary>
-    /// Extract contact phone from Message (fixed version)
-    /// </summary>
-    private string ExtractContactPhone(Message message, string userName)
-    {
-        // Determine the contact phone (the phone that is NOT the user's)
-        if (message.Direction == MessageDirection.Sent)
-        {
-            // Sent message - contact is the recipient
-            return message.To?.PhoneNumbers?.FirstOrDefault() ?? "Unknown";
-        }
-        else
-        {
-            // Received message - contact is the sender
-            return message.From?.PhoneNumbers?.FirstOrDefault() ?? "Unknown";
-        }
-    }
-
-    /// <summary>
     /// Extract topics using AI with batching for large message sets
+    /// Dynamic batch sizing based on message type
     /// </summary>
     private async Task<List<string>> ExtractTopicsAsync(List<string> messageTexts, string contactName, Action<string>? statusUpdate = null, bool extractEntities = false)
     {
-        if (messageTexts.Count < MIN_TOPIC_MESSAGES)
+        // Check minimum messages if configured (-1 means no minimum)
+        if (_options.MinMessagesPerContact >= 0 && messageTexts.Count < _options.MinMessagesPerContact)
         {
             return new List<string>();
         }
 
-        const int BATCH_SIZE = 75;  // Optimal batch size for Ollama
+        // Determine batch size based on message type and count
+        int smsCount = messageTexts.Count(m => m.Length <= 160);
+        int mmsCount = messageTexts.Count(m => m.Length > 160 && m.Length <= 1000);
+        int longMediaCount = messageTexts.Count(m => m.Length > 1000);  // Very long messages or media
+
+        // SMS messages can be processed in larger batches
+        int batchSize = 75;  // Default batch size
+        if (smsCount > 10 && mmsCount == 0 && longMediaCount == 0)
+        {
+            // All SMS, relatively small messages
+            batchSize = Math.Min(150, smsCount / 2);
+        }
+        else if (mmsCount > 0 || longMediaCount > 0)
+        {
+            // MMS or long media files - more conservative batching
+            batchSize = Math.Min(50, smsCount / 4);
+        }
 
         // For smaller message sets, process in one batch
         if (messageTexts.Count <= 100)
@@ -694,7 +830,7 @@ public class NetworkGraphGenerator
         List<string> allTopics = new List<string>();
         Dictionary<string, int> topicFrequency = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         
-        int totalBatches = (int)Math.Ceiling(messageTexts.Count / (double)BATCH_SIZE);
+        int totalBatches = (int)Math.Ceiling(messageTexts.Count / (double)batchSize);
         
         Log.Information("Processing {MessageCount} messages for {ContactName} in {BatchCount} batches", 
             messageTexts.Count, contactName, totalBatches);
@@ -705,8 +841,8 @@ public class NetworkGraphGenerator
         for (int i = 0; i < totalBatches; i++)
         {
             int batchNumber = i + 1;
-            int skip = i * BATCH_SIZE;
-            int take = Math.Min(BATCH_SIZE, messageTexts.Count - skip);
+            int skip = i * batchSize;
+            int take = Math.Min(batchSize, messageTexts.Count - skip);
             List<string> batchMessages = messageTexts.Skip(skip).Take(take).ToList();
 
             statusUpdate?.Invoke($"AI analyzing {contactName} (batch {batchNumber}/{totalBatches})");
@@ -741,17 +877,23 @@ public class NetworkGraphGenerator
             }
         }
 
-        // Sort by frequency and take top 250
-        var sortedTopics = allTopics
-            .OrderByDescending(t => topicFrequency[t])
-            .Take(250)
-            .ToList();
+        // Sort by frequency and respect max topics setting
+        IEnumerable<string> sortedTopics = allTopics
+            .OrderByDescending(t => topicFrequency[t]);
+        
+        // Apply max topics limit if configured (-1 means unlimited)
+        if (_options.MaxTopicsPerContact > 0)
+        {
+            sortedTopics = sortedTopics.Take(_options.MaxTopicsPerContact);
+        }
+        
+        var finalTopics = sortedTopics.ToList();
 
         Log.Information("{ContactName}: Aggregated {TopicCount} unique topics from {BatchCount} batches", 
-            contactName, sortedTopics.Count, totalBatches);
-        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName}: Final {sortedTopics.Count} topics after aggregation");
+            contactName, finalTopics.Count, totalBatches);
+        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName}: Final {finalTopics.Count} topics after aggregation");
 
-        return sortedTopics;
+        return finalTopics;
     }
 
     /// <summary>
@@ -759,6 +901,22 @@ public class NetworkGraphGenerator
     /// </summary>
     private async Task<List<string>> ExtractTopicsBatchAsync(List<string> batchMessages, string contactName, int batchNumber, int totalBatches, bool extractEntities = false)
     {
+        // Compute hash for this batch
+        string messageHash = _cache.ComputeHash(batchMessages, contactName, batchNumber);
+        
+        // Check cache first
+        if (_cache.TryGetCached(messageHash, out List<string> cachedTopics))
+        {
+            string allTopicsStr = string.Join(", ", cachedTopics);
+            Log.Information("{ContactName} batch {BatchNum}/{TotalBatches}: Using cached topics ({TopicCount} topics): {Topics}", 
+                contactName, batchNumber, totalBatches, cachedTopics.Count, allTopicsStr);
+            System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName} batch {batchNumber}/{totalBatches}: CACHE HIT - {cachedTopics.Count} topics - {allTopicsStr}");
+            return cachedTopics;
+        }
+
+        // Cache miss - need to call AI
+        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName} batch {batchNumber}/{totalBatches}: CACHE MISS - calling AI");
+
         StringBuilder sb = new StringBuilder();
         sb.AppendLine($"Messages from conversation with {contactName} (batch {batchNumber}/{totalBatches}):");
         
@@ -775,38 +933,45 @@ public class NetworkGraphGenerator
 Analyze these messages and identify what was actually discussed in THIS conversation.
 
 Return a JSON array of topic objects. Each object must have these fields:
-- ""name"": The actual topic/person/date/event/promise from the conversation
-- ""type"": One of: ""topic"", ""person"", ""date"", ""event"", ""promise"", ""relationship""
+- ""name"": The actual topic/person/date/event/promise/company/place from the conversation
+- ""type"": One of: ""topic"", ""person"", ""company"", ""place"", ""date"", ""event"", ""promise"", ""relationship""
 - ""subTopics"": Optional array of subtopic objects (same structure, can be nested)
+- ""messageCount"": Number of messages that mention this topic (estimate based on frequency)
 - ""context"": Optional additional context
 
 EXTRACTION RULES:
 1. Topics: General subjects discussed (type: ""topic"")
-2. People: Actual names mentioned BY NAME (type: ""person"")
-3. Dates/Events: Specific dates or events WITH CONTEXT (type: ""date"" or ""event"")
-4. Promises: Commitments actually made (type: ""promise"")
-5. Relationships: Relationship types described (type: ""relationship"")
-6. SubTopics: Related subtopics under main topics (nest them using ""subTopics"" array)
+2. People: Actual names mentioned BY NAME in the messages (type: ""person"")
+3. Companies: Business names, organizations, employers (type: ""company"")
+4. Places: Locations, restaurants, cities, venues actually mentioned (type: ""place"")
+5. Dates/Events: Specific dates or events WITH CONTEXT (type: ""date"" or ""event"")
+6. Promises: Commitments actually made (type: ""promise"")
+7. Relationships: Relationship types described (type: ""relationship"")
+8. SubTopics: Related subtopics under main topics (nest them using ""subTopics"" array)
 
-CRITICAL:
+CRITICAL INSTRUCTIONS:
 - Extract ONLY from the messages above
 - DO NOT include generic placeholder examples
 - DO NOT include category labels or section headers
-- Use actual names, dates, and content from the conversation
+- Use actual names, dates, companies, and content from the conversation
+- For each topic, estimate messageCount based on how often it appears
+- Return a SINGLE valid JSON array starting with [ and ending with ]
+- Ensure all brackets and braces are properly matched
+- DO NOT return multiple separate arrays
 
 EXAMPLE JSON FORMAT (structure only - DO NOT copy content):
 [
-  {{""name"": ""work"", ""type"": ""topic"", ""subTopics"": [
-    {{""name"": ""project deadline"", ""type"": ""topic""}},
-    {{""name"": ""team meeting"", ""type"": ""topic""}}
+  {{""name"": ""work"", ""type"": ""topic"", ""messageCount"": 15, ""subTopics"": [
+    {{""name"": ""project deadline"", ""type"": ""topic"", ""messageCount"": 8}},
+    {{""name"": ""team meeting"", ""type"": ""topic"", ""messageCount"": 5}}
   ]}},
-  {{""name"": ""PersonNameFromConversation"", ""type"": ""person""}},
-  {{""name"": ""EventFromConversation on DateFromConversation"", ""type"": ""date"", ""context"": ""celebration""}}
+  {{""name"": ""PersonNameFromConversation"", ""type"": ""person"", ""messageCount"": 12}},
+  {{""name"": ""CompanyFromConversation"", ""type"": ""company"", ""messageCount"": 7}},
+  {{""name"": ""RestaurantFromConversation"", ""type"": ""place"", ""messageCount"": 4}},
+  {{""name"": ""EventFromConversation on DateFromConversation"", ""type"": ""date"", ""messageCount"": 3, ""context"": ""celebration""}}
 ]
 
-Return ONLY a single valid JSON array (starting with [ and ending with ]). 
-Do NOT return multiple arrays.
-Do NOT include any explanatory text before or after the JSON.
+Return ONLY a single valid JSON array. Verify brackets match before responding.
 Extract ONLY items from this specific conversation.";
         }
         else
@@ -819,29 +984,32 @@ Return a JSON array of topic objects. Each object must have:
 - ""name"": The actual topic from the conversation
 - ""type"": ""topic""
 - ""subTopics"": Optional array of subtopic objects (same structure, can be nested)
+- ""messageCount"": Number of messages that mention this topic (estimate)
 
 EXTRACTION RULES:
 1. Use 1-3 word phrases for topic names
 2. Group related topics using subTopics for hierarchy
 3. Extract ONLY topics actually discussed in these messages
+4. Estimate messageCount for each topic based on how often it appears
 
-CRITICAL:
+CRITICAL INSTRUCTIONS:
 - DO NOT include generic placeholder examples
 - DO NOT include explanatory text
 - Extract ONLY from the conversation above
+- Return a SINGLE valid JSON array starting with [ and ending with ]
+- Ensure all brackets and braces are properly matched
+- DO NOT return multiple separate arrays
 
 EXAMPLE JSON FORMAT (structure only):
 [
-  {{""name"": ""work"", ""type"": ""topic"", ""subTopics"": [
-    {{""name"": ""deadlines"", ""type"": ""topic""}},
-    {{""name"": ""meetings"", ""type"": ""topic""}}
+  {{""name"": ""work"", ""type"": ""topic"", ""messageCount"": 20, ""subTopics"": [
+    {{""name"": ""deadlines"", ""type"": ""topic"", ""messageCount"": 12}},
+    {{""name"": ""meetings"", ""type"": ""topic"", ""messageCount"": 8}}
   ]}},
-  {{""name"": ""family"", ""type"": ""topic""}}
+  {{""name"": ""family"", ""type"": ""topic"", ""messageCount"": 15}}
 ]
 
-Return ONLY a single valid JSON array (starting with [ and ending with ]).
-Do NOT return multiple arrays.
-Do NOT include any explanatory text before or after the JSON.
+Return ONLY a single valid JSON array. Verify brackets match before responding.
 Extract ONLY actual conversation topics.";
         }
 
@@ -859,9 +1027,14 @@ Extract ONLY actual conversation topics.";
             // Parse JSON response
             List<string> topics = ParseJsonTopics(response, contactName, batchNumber, totalBatches);
 
+            // Add to cache
+            _cache.AddToCache(messageHash, topics, contactName, batchNumber);
+
+            // Log ALL topics (not just a preview)
+            string allTopicsStr = string.Join(", ", topics);
             Log.Debug("{ContactName} batch {BatchNum}/{TotalBatches}: Found {TopicCount} topics: {Topics}", 
-                contactName, batchNumber, totalBatches, topics.Count, string.Join(", ", topics.Take(10)));
-            System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName} batch {batchNumber}/{totalBatches}: {topics.Count} topics - {string.Join(", ", topics.Take(5))}...");
+                contactName, batchNumber, totalBatches, topics.Count, allTopicsStr);
+            System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName} batch {batchNumber}/{totalBatches}: {topics.Count} topics - {allTopicsStr}");
 
             return topics;
         }
@@ -876,6 +1049,7 @@ Extract ONLY actual conversation topics.";
 
     /// <summary>
     /// Parse JSON response and flatten topics with proper prefixes and subtopic notation
+    /// Enhanced with better error handling for malformed JSON
     /// </summary>
     private List<string> ParseJsonTopics(string jsonResponse, string contactName, int batchNumber, int totalBatches)
     {
@@ -889,27 +1063,72 @@ Extract ONLY actual conversation topics.";
             var allTopicItems = new List<TopicItem>();
             
             int currentPos = 0;
+            int arrayCount = 0;
+            
             while (currentPos < cleanJson.Length)
             {
                 int jsonStart = cleanJson.IndexOf('[', currentPos);
                 if (jsonStart < 0) break;
                 
                 int jsonEnd = FindMatchingBracket(cleanJson, jsonStart);
-                if (jsonEnd < 0) break;
+                if (jsonEnd < 0) 
+                {
+                    Log.Warning("{ContactName} batch {BatchNum}/{TotalBatches}: Unmatched bracket at position {Pos}", 
+                        contactName, batchNumber, totalBatches, jsonStart);
+                    break;
+                }
                 
                 string singleArray = cleanJson.Substring(jsonStart, jsonEnd - jsonStart + 1);
+                arrayCount++;
                 
                 // Parse this array
-                var options = new JsonSerializerOptions 
-                { 
-                    PropertyNameCaseInsensitive = true,
-                    AllowTrailingCommas = true
-                };
-                
-                var items = JsonSerializer.Deserialize<List<TopicItem>>(singleArray, options);
-                if (items != null && items.Count > 0)
+                try
                 {
-                    allTopicItems.AddRange(items);
+                    var options = new JsonSerializerOptions 
+                    { 
+                        PropertyNameCaseInsensitive = true,
+                        AllowTrailingCommas = true,
+                        ReadCommentHandling = JsonCommentHandling.Skip
+                    };
+                    
+                    var items = JsonSerializer.Deserialize<List<TopicItem>>(singleArray, options);
+                    if (items != null && items.Count > 0)
+                    {
+                        allTopicItems.AddRange(items);
+                        Log.Debug("{ContactName} batch {BatchNum}/{TotalBatches}: Parsed array {ArrayNum} with {ItemCount} items", 
+                            contactName, batchNumber, totalBatches, arrayCount, items.Count);
+                    }
+                }
+                catch (JsonException jsonEx)
+                {
+                    Log.Warning(jsonEx, "{ContactName} batch {BatchNum}/{TotalBatches}: Failed to parse array {ArrayNum}, trying to fix", 
+                        contactName, batchNumber, totalBatches, arrayCount);
+                    
+                    // Try to fix common JSON issues
+                    string fixedArray = TryFixCommonJsonIssues(singleArray);
+                    
+                    try
+                    {
+                        var options = new JsonSerializerOptions 
+                        { 
+                            PropertyNameCaseInsensitive = true,
+                            AllowTrailingCommas = true,
+                            ReadCommentHandling = JsonCommentHandling.Skip
+                        };
+                        
+                        var items = JsonSerializer.Deserialize<List<TopicItem>>(fixedArray, options);
+                        if (items != null && items.Count > 0)
+                        {
+                            allTopicItems.AddRange(items);
+                            Log.Information("{ContactName} batch {BatchNum}/{TotalBatches}: Successfully fixed and parsed array {ArrayNum}", 
+                                contactName, batchNumber, totalBatches, arrayCount);
+                        }
+                    }
+                    catch (JsonException)
+                    {
+                        Log.Warning("{ContactName} batch {BatchNum}/{TotalBatches}: Could not fix array {ArrayNum}, skipping", 
+                            contactName, batchNumber, totalBatches, arrayCount);
+                    }
                 }
                 
                 currentPos = jsonEnd + 1;
@@ -919,17 +1138,33 @@ Extract ONLY actual conversation topics.";
 
             if (topicItems == null || topicItems.Count == 0)
             {
-                Log.Warning("{ContactName} batch {BatchNum}/{TotalBatches}: Failed to parse JSON or empty array", 
-                    contactName, batchNumber, totalBatches);
-                System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName} batch {batchNumber}/{totalBatches}: JSON parse returned empty");
+                Log.Warning("{ContactName} batch {BatchNum}/{TotalBatches}: Failed to parse JSON or empty array (found {ArrayCount} arrays)", 
+                    contactName, batchNumber, totalBatches, arrayCount);
+                System.Diagnostics.Debug.WriteLine($"[NET GRAPH] {contactName} batch {batchNumber}/{totalBatches}: JSON parse returned empty (found {arrayCount} arrays)");
                 return new List<string>();
             }
 
-            // Flatten topics with prefixes and subtopic notation
-            List<string> flatTopics = new List<string>();
-            FlattenTopics(topicItems, flatTopics, null);
+            Log.Information("{ContactName} batch {BatchNum}/{TotalBatches}: Successfully parsed {ArrayCount} JSON arrays with {ItemCount} total items", 
+                contactName, batchNumber, totalBatches, arrayCount, topicItems.Count);
 
-            return flatTopics
+            // Flatten topics with prefixes and subtopic notation, tracking parent relationships
+            List<TopicWithParent> flatTopicsWithParents = new List<TopicWithParent>();
+            FlattenTopicsWithHierarchy(topicItems, flatTopicsWithParents, null, 0);
+
+            // Store parent relationships in the dictionary for later use
+            foreach (var topicWithParent in flatTopicsWithParents)
+            {
+                if (!string.IsNullOrEmpty(topicWithParent.ParentTopicName))
+                {
+                    _topicParents[topicWithParent.TopicString] = topicWithParent.ParentTopicName;
+                    System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Stored parent relationship: {topicWithParent.TopicString} -> parent: {topicWithParent.ParentTopicName}");
+                }
+            }
+
+            // Extract just the topic strings for return
+            List<string> topicStrings = flatTopicsWithParents.Select(t => t.TopicString).ToList();
+
+            return topicStrings
                 .Where(t => !string.IsNullOrWhiteSpace(t) && t.Length > 2 && t.Length < 150)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
@@ -950,6 +1185,38 @@ Extract ONLY actual conversation topics.";
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
         }
+    }
+
+    /// <summary>
+    /// Try to fix common JSON issues like mismatched brackets, trailing commas, etc.
+    /// </summary>
+    private string TryFixCommonJsonIssues(string json)
+    {
+        // Remove any trailing commas before closing brackets
+        json = System.Text.RegularExpressions.Regex.Replace(json, @",\s*}", "}");
+        json = System.Text.RegularExpressions.Regex.Replace(json, @",\s*]", "]");
+
+        // Try to balance brackets
+        int openBraces = json.Count(c => c == '{');
+        int closeBraces = json.Count(c => c == '}');
+        int openBrackets = json.Count(c => c == '[');
+        int closeBrackets = json.Count(c => c == ']');
+        
+        // Add missing closing braces
+        while (openBraces > closeBraces)
+        {
+            json += "}";
+            closeBraces++;
+        }
+        
+        // Add missing closing brackets
+        while (openBrackets > closeBrackets)
+        {
+            json += "]";
+            closeBrackets++;
+        }
+        
+        return json;
     }
 
     /// <summary>
@@ -974,9 +1241,10 @@ Extract ONLY actual conversation topics.";
     }
 
     /// <summary>
-    /// Recursively flatten topics and subtopics with proper naming
+    /// Recursively flatten topics and subtopics with proper naming and message counts
+    /// Returns a list of topics with parent relationships for hierarchical visualization
     /// </summary>
-    private void FlattenTopics(List<TopicItem> items, List<string> output, string? parentPrefix)
+    private void FlattenTopicsWithHierarchy(List<TopicItem> items, List<TopicWithParent> output, string? parentTopicName, int parentMessageCount = 0)
     {
         foreach (var item in items)
         {
@@ -986,42 +1254,65 @@ Extract ONLY actual conversation topics.";
             // Build the topic string with appropriate prefix
             string topicString;
             string cleanName = item.Name.Trim();
+            
+            // If message count is 0 or missing, use parent's count or estimate
+            int messageCount = item.MessageCount;
+            if (messageCount == 0 && parentMessageCount > 0)
+            {
+                // Subtopics inherit a portion of parent's count
+                messageCount = Math.Max(1, parentMessageCount / 2);
+                System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Subtopic '{cleanName}' had 0 count, using {messageCount} from parent");
+            }
 
-            // Add type prefix for non-topic types
+            // Add type prefix for non-topic types and include message count
             switch (item.Type?.ToLower())
             {
                 case "person":
-                    topicString = $"person:{cleanName}";
+                    topicString = $"person:{cleanName}:{messageCount}";
+                    break;
+                case "company":
+                    topicString = $"company:{cleanName}:{messageCount}";
+                    break;
+                case "place":
+                    topicString = $"place:{cleanName}:{messageCount}";
                     break;
                 case "date":
                 case "event":
-                    topicString = $"date:{cleanName}";
+                    topicString = $"date:{cleanName}:{messageCount}";
                     break;
                 case "promise":
-                    topicString = $"promise:{cleanName}";
+                    topicString = $"promise:{cleanName}:{messageCount}";
                     break;
                 case "relationship":
-                    topicString = $"relationship:{cleanName}";
+                    topicString = $"person:{cleanName}:{messageCount}";
                     break;
                 default:
-                    // For subtopics, indicate parent relationship
-                    if (!string.IsNullOrEmpty(parentPrefix))
+                    // For subtopics, mark them as subtopics
+                    if (!string.IsNullOrEmpty(parentTopicName))
                     {
-                        topicString = $"{cleanName} ({parentPrefix})";  // e.g., "deadlines (work)"
+                        topicString = $"subtopic:{cleanName}:{messageCount}";
+                        System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Flattening subtopic: {topicString} (parent: {parentTopicName})");
                     }
                     else
                     {
-                        topicString = cleanName;
+                        topicString = $"{cleanName}:{messageCount}";
                     }
                     break;
             }
 
-            output.Add(topicString);
+            // Add to output with parent reference
+            output.Add(new TopicWithParent
+            {
+                TopicString = topicString,
+                ParentTopicName = parentTopicName,
+                CleanName = cleanName
+            });
 
-            // Recursively process subtopics
+            // Recursively process subtopics, passing the current topic as parent
             if (item.SubTopics != null && item.SubTopics.Count > 0)
             {
-                FlattenTopics(item.SubTopics, output, cleanName);
+                System.Diagnostics.Debug.WriteLine($"[NET GRAPH] Processing {item.SubTopics.Count} subtopics for '{cleanName}'");
+                FlattenTopicsWithHierarchy(item.SubTopics, output, cleanName, messageCount);
             }
         }
     }
@@ -1201,6 +1492,18 @@ Extract ONLY actual conversation topics.";
             <div class=""legend-color"" style=""background-color: #00BCD4;""></div>
             <span>Promises</span>
         </div>
+        <div class=""legend-item"">
+            <div class=""legend-color"" style=""background-color: #FF5722;""></div>
+            <span>Companies</span>
+        </div>
+        <div class=""legend-item"">
+            <div class=""legend-color"" style=""background-color: #8BC34A;""></div>
+            <span>Places</span>
+        </div>
+        <div class=""legend-item"">
+            <div class=""legend-color"" style=""background-color: #FFC107;""></div>
+            <span>Subtopics</span>
+        </div>
         <div style=""margin-top: 10px; font-size: 11px; color: #aaa;"">
             Click any node to highlight its connections
         </div>
@@ -1285,6 +1588,9 @@ Extract ONLY actual conversation topics.";
                 if (d.group === 3) return '#F44336';  // Person mentioned - red
                 if (d.group === 4) return '#9C27B0';  // Date/event - purple
                 if (d.group === 5) return '#00BCD4';  // Promise - cyan
+                if (d.group === 6) return '#FF5722';  // Company - deep orange
+                if (d.group === 7) return '#8BC34A';  // Place - light green
+                if (d.group === 8) return '#FFC107';  // Subtopic - amber
                 return '#999999';  // Unknown - gray
             }})
             .call(d3.drag()
@@ -1392,6 +1698,59 @@ Extract ONLY actual conversation topics.";
     }
 
     /// <summary>
+    /// Extract message count from topic string (format: "name:count" or "prefix:name:count")
+    /// </summary>
+    private int ExtractMessageCount(string topic, List<string> msgTexts)
+    {
+        // Try to extract count from the end of the topic string
+        int lastColonIndex = topic.LastIndexOf(':');
+        if (lastColonIndex > 0 && lastColonIndex < topic.Length - 1)
+        {
+            string potentialCount = topic.Substring(lastColonIndex + 1);
+            if (int.TryParse(potentialCount, out int count) && count > 0)
+            {
+                return count;
+            }
+        }
+
+        // Fallback: count occurrences in messages
+        string topicName = RemoveMessageCount(topic);
+        string cleanName = topicName.Contains(':') 
+            ? topicName.Substring(topicName.LastIndexOf(':') + 1).Trim()
+            : topicName.Trim();
+        
+        int textCount = msgTexts.Count(m => m.IndexOf(cleanName, StringComparison.OrdinalIgnoreCase) >= 0);
+        
+        if (textCount == 0)
+        {
+            // Estimate based on total messages and number of topics
+            textCount = Math.Max(1, msgTexts.Count / 10);
+        }
+
+        return textCount;
+    }
+
+    /// <summary>
+    /// Remove message count suffix from topic string
+    /// </summary>
+    private string RemoveMessageCount(string topic)
+    {
+        // Check if the last segment after colon is a number
+        int lastColonIndex = topic.LastIndexOf(':');
+        if (lastColonIndex > 0 && lastColonIndex < topic.Length - 1)
+        {
+            string potentialCount = topic.Substring(lastColonIndex + 1);
+            if (int.TryParse(potentialCount, out int _))
+            {
+                // It's a number, remove it
+                return topic.Substring(0, lastColonIndex);
+            }
+        }
+        
+        return topic;
+    }
+
+    /// <summary>
     /// Check if a string is a category label that should be filtered out
     /// </summary>
     /// <summary>
@@ -1468,9 +1827,21 @@ Extract ONLY actual conversation topics.";
     /// </summary>
     private (int groupType, string displayName) ParseEntityType(string topic)
     {
-        if (topic.StartsWith("person:", StringComparison.OrdinalIgnoreCase))
+        if (topic.StartsWith("subtopic:", StringComparison.OrdinalIgnoreCase))
+        {
+            return (8, topic.Substring(9).Trim());  // Group 8 = Subtopic
+        }
+        else if (topic.StartsWith("person:", StringComparison.OrdinalIgnoreCase))
         {
             return (3, topic.Substring(7).Trim());  // Group 3 = Person
+        }
+        else if (topic.StartsWith("company:", StringComparison.OrdinalIgnoreCase))
+        {
+            return (6, topic.Substring(8).Trim());  // Group 6 = Company
+        }
+        else if (topic.StartsWith("place:", StringComparison.OrdinalIgnoreCase))
+        {
+            return (7, topic.Substring(6).Trim());  // Group 7 = Place
         }
         else if (topic.StartsWith("date:", StringComparison.OrdinalIgnoreCase))
         {

@@ -215,12 +215,14 @@ public class TopicAnalyzer
 
     private string GetContactName(Message message)
     {
-        if (!string.IsNullOrEmpty(message.From?.Name))
+        if (!string.IsNullOrEmpty(message.From?.Name) && 
+            !message.From.Name.Equals("(Unknown)", StringComparison.OrdinalIgnoreCase))
         {
             return message.From.Name;
         }
 
-        if (!string.IsNullOrEmpty(message.To?.Name))
+        if (!string.IsNullOrEmpty(message.To?.Name) && 
+            !message.To.Name.Equals("(Unknown)", StringComparison.OrdinalIgnoreCase))
         {
             return message.To.Name;
         }

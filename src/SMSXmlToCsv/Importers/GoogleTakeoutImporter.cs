@@ -19,6 +19,9 @@ public class GoogleTakeoutImporter : IDataImporter
     // Timestamps greater than this value (year 2286 in seconds) are assumed to be milliseconds
     private const long MILLISECONDS_THRESHOLD = 10_000_000_000L;
 
+    // Detected user email (set during import)
+    private string? _userEmail;
+
     public string SourceName => "Google Takeout";
 
     public bool CanImport(string sourcePath)
@@ -170,6 +173,13 @@ public class GoogleTakeoutImporter : IDataImporter
             return messages; // No valid groups found
         }
 
+        // Detect user email by finding the most common email across all conversations
+        _userEmail = await DetectUserEmailAsync(groupDirectories);
+        if (!string.IsNullOrEmpty(_userEmail))
+        {
+            Serilog.Log.Information("Detected user email: {UserEmail}", _userEmail);
+        }
+
         // Show count instead of enumerating
         Serilog.Log.Information("Found {GroupCount} Google Chat group(s) to import", totalGroups);
 
@@ -186,7 +196,7 @@ public class GoogleTakeoutImporter : IDataImporter
             try
             {
                 // Parse group_info.json to get recipients
-                Dictionary<string, string> participants = new Dictionary<string, string>();
+                Dictionary<string, (string name, string email)> participants = new Dictionary<string, (string, string)>();
                 if (File.Exists(groupInfoPath))
                 {
                     participants = await ParseGroupInfoAsync(groupInfoPath);
@@ -212,9 +222,9 @@ public class GoogleTakeoutImporter : IDataImporter
         return messages;
     }
 
-    private async Task<Dictionary<string, string>> ParseGroupInfoAsync(string groupInfoPath)
+    private async Task<Dictionary<string, (string name, string email)>> ParseGroupInfoAsync(string groupInfoPath)
     {
-        Dictionary<string, string> participants = new Dictionary<string, string>();
+        Dictionary<string, (string name, string email)> participants = new Dictionary<string, (string, string)>();
 
         try
         {
@@ -226,16 +236,31 @@ public class GoogleTakeoutImporter : IDataImporter
             // The exact structure may vary, so we handle common patterns
             if (root.TryGetProperty("members", out JsonElement members))
             {
+                Serilog.Log.Debug("Parsing {MemberCount} members from group_info.json: {Path}",
+                    members.GetArrayLength(), groupInfoPath);
+
                 foreach (JsonElement member in members.EnumerateArray())
                 {
                     string id = string.Empty;
                     string name = "Unknown";
+                    string email = string.Empty;
+                    string userType = string.Empty;
 
+                    // Extract ID
                     if (member.TryGetProperty("id", out JsonElement idElement))
                     {
                         id = idElement.GetString() ?? string.Empty;
                     }
+                    else if (member.TryGetProperty("user_id", out JsonElement userIdElement))
+                    {
+                        id = userIdElement.GetString() ?? string.Empty;
+                    }
+                    else if (member.TryGetProperty("gaia_id", out JsonElement gaiaIdElement))
+                    {
+                        id = gaiaIdElement.GetString() ?? string.Empty;
+                    }
 
+                    // Extract name
                     if (member.TryGetProperty("name", out JsonElement nameElement))
                     {
                         name = nameElement.GetString() ?? "Unknown";
@@ -244,23 +269,69 @@ public class GoogleTakeoutImporter : IDataImporter
                     {
                         name = displayNameElement.GetString() ?? "Unknown";
                     }
+                    else if (member.TryGetProperty("fallback_name", out JsonElement fallbackNameElement))
+                    {
+                        name = fallbackNameElement.GetString() ?? "Unknown";
+                    }
+
+                    // Extract email - try multiple fields
+                    if (member.TryGetProperty("email", out JsonElement emailElement))
+                    {
+                        email = emailElement.GetString() ?? string.Empty;
+                    }
+                    else if (member.TryGetProperty("user_email", out JsonElement userEmailElement))
+                    {
+                        email = userEmailElement.GetString() ?? string.Empty;
+                    }
+                    else if (member.TryGetProperty("email_address", out JsonElement emailAddressElement))
+                    {
+                        email = emailAddressElement.GetString() ?? string.Empty;
+                    }
+                    // Sometimes the ID itself is an email
+                    else if (!string.IsNullOrEmpty(id) && id.Contains("@"))
+                    {
+                        email = id;
+                    }
+
+                    // Extract user type (for logging/debugging)
+                    if (member.TryGetProperty("user_type", out JsonElement userTypeElement))
+                    {
+                        userType = userTypeElement.GetString() ?? string.Empty;
+                    }
+                    else if (member.TryGetProperty("type", out JsonElement typeElement))
+                    {
+                        userType = typeElement.GetString() ?? string.Empty;
+                    }
 
                     if (!string.IsNullOrEmpty(id))
                     {
-                        participants[id] = name;
+                        participants[id] = (name, email);
+                        Serilog.Log.Debug("  Member: ID={Id}, Name={Name}, Email={Email}, Type={Type}",
+                            id, name, email, userType);
+                    }
+                    else
+                    {
+                        Serilog.Log.Debug("  Skipping member with no ID: Name={Name}, Email={Email}", name, email);
                     }
                 }
+
+                Serilog.Log.Information("Loaded {Count} participants from group_info.json ({WithEmail} with emails)",
+                    participants.Count, participants.Count(p => !string.IsNullOrEmpty(p.Value.email)));
+            }
+            else
+            {
+                Serilog.Log.Debug("No 'members' property found in group_info.json: {Path}", groupInfoPath);
             }
         }
         catch (Exception ex)
         {
-            Serilog.Log.Debug(ex, "Failed to parse group_info.json: {Path}", groupInfoPath);
+            Serilog.Log.Warning(ex, "Failed to parse group_info.json: {Path}", groupInfoPath);
         }
 
         return participants;
     }
 
-    private async Task<IEnumerable<Message>> ParseGoogleChatMessagesAsync(string messagesPath, Dictionary<string, string> participants)
+    private async Task<IEnumerable<Message>> ParseGoogleChatMessagesAsync(string messagesPath, Dictionary<string, (string name, string email)> participants)
     {
         List<Message> messages = new List<Message>();
 
@@ -302,13 +373,14 @@ public class GoogleTakeoutImporter : IDataImporter
         return messages;
     }
 
-    private Message? ParseGoogleChatMessage(JsonElement messageElement, Dictionary<string, string> participants)
+    private Message? ParseGoogleChatMessage(JsonElement messageElement, Dictionary<string, (string name, string email)> participants)
     {
         try
         {
-            // Get creator (sender) information
+            // Get creator (sender) information - email is in the message itself!
             string creatorId = string.Empty;
             string creatorName = "Unknown";
+            string creatorEmail = string.Empty;
 
             if (messageElement.TryGetProperty("creator", out JsonElement creator))
             {
@@ -329,13 +401,25 @@ public class GoogleTakeoutImporter : IDataImporter
                 {
                     creatorName = displayNameElement.GetString() ?? "Unknown";
                 }
+
+                // Email is directly in the creator object
+                if (creator.TryGetProperty("email", out JsonElement emailElement))
+                {
+                    creatorEmail = emailElement.GetString() ?? string.Empty;
+                }
             }
 
-            // If creator name is still Unknown, try to look it up in participants
-            if (creatorName == "Unknown" && !string.IsNullOrEmpty(creatorId) && participants.ContainsKey(creatorId))
+            // Fallback: If we still don't have email, try participant lookup
+            if (string.IsNullOrEmpty(creatorEmail) && !string.IsNullOrEmpty(creatorId) && participants.ContainsKey(creatorId))
             {
-                creatorName = participants[creatorId];
+                if (creatorName == "Unknown")
+                {
+                    creatorName = participants[creatorId].name;
+                }
+                creatorEmail = participants[creatorId].email;
             }
+
+            Serilog.Log.Debug("Message creator: Name={Name}, Email={Email}, ID={Id}", creatorName, creatorEmail, creatorId);
 
             // Get timestamp - handle both seconds and milliseconds
             long timestampValue = 0;
@@ -375,20 +459,32 @@ public class GoogleTakeoutImporter : IDataImporter
                 return null; // Skip empty messages
             }
 
+            // Determine message direction based on whether creator is the user
+            MessageDirection direction = MessageDirection.Unknown;
+            if (!string.IsNullOrEmpty(_userEmail) && !string.IsNullOrEmpty(creatorEmail))
+            {
+                direction = creatorEmail.Equals(_userEmail, StringComparison.OrdinalIgnoreCase)
+                    ? MessageDirection.Sent
+                    : MessageDirection.Received;
+            }
+
             // For Google Chat groups, sender is the creator, recipients are other participants
-            Contact sender = Contact.FromName(creatorName);
-            
+            Contact sender = !string.IsNullOrEmpty(creatorEmail)
+                ? new Contact(creatorName, new HashSet<string>(), new HashSet<string> { creatorEmail })
+                : Contact.FromName(creatorName);
+
             // Create a generic recipient representing the group
             // We could list all participants, but that would be complex for the recipient field
             Contact recipient = Contact.FromName("Google Chat Group");
 
-            return Message.CreateTextMessage(
+            return new ChatMessage(
                 "Google Chat",
                 sender,
                 recipient,
                 timestamp,
                 messageText,
-                MessageDirection.Unknown); // Direction is unknown in group chats
+                direction,
+                new List<MediaAttachment>());
         }
         catch (Exception ex)
         {
@@ -461,7 +557,7 @@ public class GoogleTakeoutImporter : IDataImporter
         try
         {
             // Get participants
-            Dictionary<string, string> participants = new Dictionary<string, string>();
+            Dictionary<string, (string name, string email)> participants = new Dictionary<string, (string, string)>();
             if (conversationState.TryGetProperty("conversation", out JsonElement conversation) &&
                 conversation.TryGetProperty("participant_data", out JsonElement participantData))
             {
@@ -469,11 +565,22 @@ public class GoogleTakeoutImporter : IDataImporter
                 {
                     string gaiaId = string.Empty;
                     string name = "Unknown";
+                    string email = string.Empty;
 
                     if (participant.TryGetProperty("id", out JsonElement idElement) &&
                         idElement.TryGetProperty("gaia_id", out JsonElement gaiaIdElement))
                     {
                         gaiaId = gaiaIdElement.GetString() ?? string.Empty;
+
+                        // Check if there's an email in the ID element
+                        if (idElement.TryGetProperty("chat_id", out JsonElement chatIdElement))
+                        {
+                            string chatId = chatIdElement.GetString() ?? string.Empty;
+                            if (!string.IsNullOrEmpty(chatId) && chatId.Contains("@"))
+                            {
+                                email = chatId;
+                            }
+                        }
                     }
 
                     if (participant.TryGetProperty("fallback_name", out JsonElement nameElement))
@@ -481,9 +588,15 @@ public class GoogleTakeoutImporter : IDataImporter
                         name = nameElement.GetString() ?? "Unknown";
                     }
 
+                    // Try to get email from various possible fields
+                    if (string.IsNullOrEmpty(email) && participant.TryGetProperty("email", out JsonElement emailElement))
+                    {
+                        email = emailElement.GetString() ?? string.Empty;
+                    }
+
                     if (!string.IsNullOrEmpty(gaiaId))
                     {
-                        participants[gaiaId] = name;
+                        participants[gaiaId] = (name, email);
                     }
                 }
             }
@@ -511,7 +624,7 @@ public class GoogleTakeoutImporter : IDataImporter
         return messages;
     }
 
-    private Message? ParseHangoutsEvent(JsonElement eventElement, Dictionary<string, string> participants)
+    private Message? ParseHangoutsEvent(JsonElement eventElement, Dictionary<string, (string name, string email)> participants)
     {
         try
         {
@@ -523,9 +636,13 @@ public class GoogleTakeoutImporter : IDataImporter
                 senderGaiaId = gaiaIdElement.GetString() ?? string.Empty;
             }
 
-            string senderName = participants.ContainsKey(senderGaiaId) 
-                ? participants[senderGaiaId] 
-                : "Unknown";
+            string senderName = "Unknown";
+            string senderEmail = string.Empty;
+            if (participants.ContainsKey(senderGaiaId))
+            {
+                senderName = participants[senderGaiaId].name;
+                senderEmail = participants[senderGaiaId].email;
+            }
 
             // Get timestamp (microseconds since Unix epoch)
             long timestampMicroseconds = 0;
@@ -558,16 +675,19 @@ public class GoogleTakeoutImporter : IDataImporter
                 return null; // Skip empty messages
             }
 
-            Contact sender = Contact.FromName(senderName);
+            Contact sender = !string.IsNullOrEmpty(senderEmail)
+                ? new Contact(senderName, new HashSet<string>(), new HashSet<string> { senderEmail })
+                : Contact.FromName(senderName);
             Contact recipient = Contact.FromName("Hangouts Conversation");
 
-            return Message.CreateTextMessage(
+            return new ChatMessage(
                 "Google Hangouts",
                 sender,
                 recipient,
                 timestamp,
                 content,
-                MessageDirection.Unknown);
+                MessageDirection.Unknown,
+                new List<MediaAttachment>());
         }
         catch (Exception)
         {
@@ -673,6 +793,81 @@ public class GoogleTakeoutImporter : IDataImporter
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Detect the user's email by finding the most common email across all Google Chat conversations.
+    /// The user's email should appear in every conversation they participated in.
+    /// </summary>
+    private async Task<string?> DetectUserEmailAsync(string[] groupDirectories)
+    {
+        Dictionary<string, int> emailCounts = new Dictionary<string, int>();
+
+        foreach (string groupDir in groupDirectories)
+        {
+            string messagesPath = Path.Combine(groupDir, "messages.json");
+            if (!File.Exists(messagesPath))
+            {
+                continue;
+            }
+
+            try
+            {
+                string jsonContent = await File.ReadAllTextAsync(messagesPath);
+                using JsonDocument doc = JsonDocument.Parse(jsonContent);
+                JsonElement root = doc.RootElement;
+
+                if (!root.TryGetProperty("messages", out JsonElement messagesArray))
+                {
+                    continue;
+                }
+
+                // Track unique emails per conversation
+                HashSet<string> uniqueEmailsInConversation = new HashSet<string>();
+
+                foreach (JsonElement messageElement in messagesArray.EnumerateArray())
+                {
+                    if (messageElement.TryGetProperty("creator", out JsonElement creator))
+                    {
+                        if (creator.TryGetProperty("email", out JsonElement emailElement))
+                        {
+                            string? email = emailElement.GetString();
+                            if (!string.IsNullOrEmpty(email))
+                            {
+                                uniqueEmailsInConversation.Add(email);
+                            }
+                        }
+                    }
+                }
+
+                // Increment count for each unique email found in this conversation
+                foreach (string email in uniqueEmailsInConversation)
+                {
+                    if (!emailCounts.ContainsKey(email))
+                    {
+                        emailCounts[email] = 0;
+                    }
+                    emailCounts[email]++;
+                }
+            }
+            catch (Exception ex)
+            {
+                Serilog.Log.Debug(ex, "Failed to scan messages for user email detection: {Path}", messagesPath);
+            }
+        }
+
+        // Find the email that appears in the most conversations (should be the user)
+        if (emailCounts.Count == 0)
+        {
+            return null;
+        }
+
+        string? userEmail = emailCounts.OrderByDescending(kvp => kvp.Value).First().Key;
+        int conversationCount = emailCounts[userEmail];
+        Serilog.Log.Debug("Email '{Email}' appears in {Count}/{Total} conversations",
+            userEmail, conversationCount, groupDirectories.Length);
+
+        return userEmail;
     }
 
     /// <summary>

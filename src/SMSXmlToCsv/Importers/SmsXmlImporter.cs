@@ -74,7 +74,7 @@ public class SmsXmlImporter : IDataImporter
         return messages;
     }
 
-    private Message? ParseSmsElement(XElement smsElement)
+    private SmsMessage? ParseSmsElement(XElement smsElement)
     {
         try
         {
@@ -104,13 +104,14 @@ public class SmsXmlImporter : IDataImporter
             Contact from = direction == MessageDirection.Sent ? self : contact;
             Contact to = direction == MessageDirection.Sent ? contact : self;
 
-            return Message.CreateTextMessage(
+            return new SmsMessage(
                 SourceName,
                 from,
                 to,
                 timestamp,
                 body,
-                direction);
+                direction,
+                new List<MediaAttachment>());
         }
         catch (Exception)
         {
@@ -119,7 +120,7 @@ public class SmsXmlImporter : IDataImporter
         }
     }
 
-    private Message? ParseMmsElement(XElement mmsElement)
+    private SmsMessage? ParseMmsElement(XElement mmsElement)
     {
         try
         {
@@ -178,7 +179,7 @@ public class SmsXmlImporter : IDataImporter
             Contact from = direction == MessageDirection.Sent ? self : contact;
             Contact to = direction == MessageDirection.Sent ? contact : self;
 
-            return new Message(
+            return new SmsMessage(
                 SourceName,
                 from,
                 to,

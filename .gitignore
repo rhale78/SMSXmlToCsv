@@ -35,3 +35,13 @@ TestResults/
 # Temporary files
 *.tmp
 *.cache
+
+# AI cache data
+data/
+**/data/
+*.backup
+/.claude/settings.local.json
+/IMPLEMENTATION_ROADMAP.md
+/IMPLEMENTATION_STATUS.md
+/ISSUES_TO_CREATE.md
+/nul
