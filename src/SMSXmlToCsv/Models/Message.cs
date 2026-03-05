@@ -69,7 +69,7 @@ public record Message(
     public virtual string GetContactName(MessageDirection direction)
     {
         Contact contact = direction == MessageDirection.Sent ? To : From;
-        string name = contact?.Name;
+        string? name = contact?.Name;
         
         // Fallback to email if name is missing or "Unknown"
         if (string.IsNullOrWhiteSpace(name) || name.Equals("Unknown", StringComparison.OrdinalIgnoreCase))
@@ -115,7 +115,7 @@ public record Message(
         if (contact == null) 
             return true;
         
-        string name = contact.Name?.Trim();
+        string? name = contact.Name?.Trim();
         if (string.IsNullOrWhiteSpace(name)) 
             return true;
         

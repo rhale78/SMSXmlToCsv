@@ -107,7 +107,7 @@ public class OllamaSentimentAnalyzer
     public async Task<string> CallOllamaAsync(string prompt, int maxRetries = 3)
     {
         int attempt = 0;
-        Exception lastException = null;
+        Exception? lastException = null;
 
         while (attempt < maxRetries)
         {
